@@ -3,14 +3,15 @@ import { EngineCache, ThreejsSceneCache } from "../3d/modeltothree";
 import { RSModel } from "../3d/scene/model";
 import { expandSprite, parseSprite } from "../3d/materials/sprite";
 import { CacheFileSource } from "../cache";
-import { prepareClientScript } from "../clientscript";
+import { ClientScriptDeobLoader } from "../clientscript";
 import { ClientScriptInterpreter } from "../clientscript/interpreter";
 import { cacheMajors } from "../constants";
 import { makeImageData, pixelsToDataUrl } from "../imgutils";
-import { parse } from "../opdecoder";
-import { escapeHTML, rsmarkupToSafeHtml, TypedEmitter } from "../utils";
-import { UiCameraParams, updateItemCamera } from "../viewer/scenenodes";
+import { parse } from "../parser/jsondecoders";
+import { escapeHTML, packComponent, rsmarkupToSafeHtml, TypedEmitter } from "../utils";
 import { ThreeJsRenderer } from "../viewer/threejsrender";
+import { UiCameraParams } from "../viewer/tabs/simplemodes";
+import { clientScriptDeobPopup } from "../viewer/tabs/browse";
 
 
 export const MAGIC_CONST_MOUSE_X = 0x80000001 | 0;
@@ -19,6 +20,73 @@ export const MAGIC_CONST_CURRENTCOMP = 0x80000003 | 0;
 export const MAGIC_CONST_OPNR = 0x80000004 | 0;
 export const MAGIC_CONST_IF_AS_CC = 0x80000005 | 0;
 export const MAGIC_UNK06 = 0x80000006 | 0;
+
+// map props defined in stylesheets cache
+export const styleSheetImageProps = [
+    0x2bfe1f41,
+    0x2f379723,
+    0x5a74cde9,
+    0x7d112e77,
+    0x9a4bc95f,
+    0x9c1f9920,
+    0x9cd91cd3,
+    0x26db786d,
+    0x31fae633,
+    0x33aa6501,
+    0x35f700a1,
+    0x37e641ca,
+    0x57b17ed9,
+    0x77eebbf6,
+    0x238dd969,
+    0x686ee599,
+    0x407722e8,
+    0xb5392a9d,
+    0xc2c5b115,
+    0xc6a890b2,
+    0xc188b831,
+    0xcc4e8ae8,
+    0xcf56a4b5,
+    0xd8aee3b1,
+    0xd536d8e6,
+    0xe23b18f3,
+    0xe71cd326,
+    0xe99d35ec,
+    0xe5258a6b,
+    0xe24930ce,
+    0xe376315d,
+    0xeefb07f7
+];
+export const styleSheetRGBProps = [
+    0x1f5a4bc8,
+    0x5e0528ec,
+    0x5ea1beb2,
+    0x6b9b6ef9,
+    0x16c406be,
+    0x17be2fcb,
+    0x34ccc437,
+    0x4923a55a,
+    0xa586f97e,
+    0xa4324630,
+    0xb3be1847,
+    0xc38f9bdc,
+    0xd02363d6
+];
+export const styleSheetRGBAProps = [
+    0x1f81307d,
+    0x4d9cec74,
+    0x8e9f4906,
+    0x9ce28a3c,
+    0x9fa5d94c,
+    0x38f8b616,
+    0x63f955ae,
+    0x81579e23,
+    0xbeb69647,
+    0xddabbebe,
+    0xe06f2abb,
+    0xe33279cb,
+    0xe0836933,
+    0xee712164
+];
 
 type HTMLResult = string;
 export type RsInterfaceDomTree = {
@@ -36,7 +104,7 @@ export class UiRenderContext extends TypedEmitter<{ hover: RsInterfaceComponent 
     renderer: ThreeJsRenderer | null = null;
     comps = new Map<number, RsInterfaceComponent>();
     highlightstack: HTMLElement[] = [];
-    interpreterprom: Promise<ClientScriptInterpreter> | null = null;
+    interpreter: ClientScriptInterpreter | null = null;
     touchedComps = new Set<RsInterfaceComponent>();
     runOnloadScripts = false;
     constructor(source: CacheFileSource) {
@@ -65,14 +133,14 @@ export class UiRenderContext extends TypedEmitter<{ hover: RsInterfaceComponent 
     }
     async runClientScriptCallback(compid: number, cbdata: (number | string)[]) {
         if (cbdata.length == 0) { return; }
-        let inter = await (this.interpreterprom ??= prepareClientScript(this.source).then(q => new ClientScriptInterpreter(q, this)));
+        this.interpreter ??= new ClientScriptInterpreter(ClientScriptDeobLoader.forCache(this.source).getOrThrow(), this);
         if (typeof cbdata[0] != "number") { throw new Error("expected callback script id but got string"); }
 
-        inter.reset();//TODO warn if this actually does anything?
-        inter.pushlist(cbdata.slice(1));
-        inter.activecompid = compid;
-        await inter.callscriptid(cbdata[0]);
-        await inter.runToEnd();
+        this.interpreter.reset();//TODO warn if this actually does anything?
+        this.interpreter.pushlist(cbdata.slice(1));
+        this.interpreter.activecompid = compid;
+        await this.interpreter.callscriptid(cbdata[0]);
+        await this.interpreter.runToEnd();
         this.updateInvalidatedComps();
         // console.log(await renderClientScript(p.source, await p.source.getFileById(cacheMajors.clientscript, callbackid), callbackid))
     }
@@ -115,7 +183,7 @@ export async function loadRsInterfaceData(ctx: UiRenderContext, id: number) {
 
     for (let sub of arch) {
         try {
-            let compid = (id << 16) | sub.fileid;
+            let compid = packComponent(id, sub.fileid);
             if (ctx.comps.has(compid)) { throw new Error("ui render context already had comp with same id"); }
             let comp = new RsInterfaceComponent(ctx, parse.interfaces.read(sub.buffer, ctx.source), compid);
             comps.set(sub.fileid, comp);
@@ -199,6 +267,7 @@ export function renderRsInterfaceDOM(ctx: UiRenderContext, data: Awaited<ReturnT
     let loadprom: Promise<void>
     if (ctx.runOnloadScripts) {
         loadprom = (async () => {
+            await clientScriptDeobPopup(ctx.source);
             for (let comp of data.comps.values()) {
                 if (comp.data.scripts.load.length != 0) {
                     await ctx.runClientScriptCallback(comp.compid, comp.data.scripts.load).catch(e => console.warn("comp load err", e));

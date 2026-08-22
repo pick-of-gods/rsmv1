@@ -1,17 +1,17 @@
 // import { filesource, cliArguments } from "../cliparser";
 // import { run, command, number, option, string, boolean, Type, flag, oneOf } from "cmd-ts";
 import { cacheConfigPages, cacheMajors, cacheMapFiles, lastLegacyBuildnr } from "../constants";
-import { parse } from "../opdecoder";
-import { archiveToFileId } from "../cache";
-import { ChunkData, defaultMorphId, getMapsquareData, MapRect, worldStride } from "../3d/mapsquare";
+import { parse } from "../parser/jsondecoders";
+import { archiveToFileId, mappedFileIds, oldConfigMaps } from "../cache";
+import { ChunkData, defaultMorphId, getMapsquareData, MapRect } from "../3d/mapsquare";
 import { convertMaterial } from "../3d/materials/jmat";
 import { crc32, crc32addInt } from "../libs/crc32util";
-import { arrayEnum, trickleTasksTwoStep, trickleTasks } from "../utils";
-import { EngineCache, iterateConfigFiles } from "../3d/modeltothree";
+import { arrayEnum, trickleTasksTwoStep, trickleTasks, packMapsquare } from "../utils";
+import { EngineCache } from "../3d/modeltothree";
 import { legacyMajors, legacyGroups } from "../cache/legacycache";
 import { mapsquare_overlays } from "../../generated/mapsquare_overlays";
 import { mapsquare_underlays } from "../../generated/mapsquare_underlays";
-import { objects } from "../../generated/objects";
+import { locs } from "../../generated/locs";
 
 export const depClasses = arrayEnum(["material", "model", "item", "loc", "mapsquare", "sequence", "skeleton", "frameset", "animgroup", "npc", "framebase", "texture", "enum", "overlay", "underlay"]);
 const depidmap = Object.fromEntries(depClasses.map((q, i) => [q, i]));
@@ -29,24 +29,32 @@ type DepCallback = (holdertype: DepTypes, holderId: number, deptType: DepTypes, 
 type HashCallback = (depType: DepTypes, depId: number, hash: number, version: number) => void;
 type DepCollector = (cache: EngineCache, addDep: DepCallback, addHash: HashCallback, args: DepArgs) => Promise<void>;
 
-const mapsquareDeps: DepCollector = async (cache, addDep, addHash) => {
-	let mapsquareindices = await cache.getCacheIndex(cacheMajors.mapsquares);
-	for (let square of mapsquareindices) {
-		if (!square) { continue; }
-		let locsconfig = square.subindices.indexOf(cacheMapFiles.locations);
-		addHash("mapsquare", square.minor, square.crc, square.version);
-		if (locsconfig != -1) {
-			let arch = await cache.getFileArchive(square);
-			let locs = parse.mapsquareLocations.read(arch[locsconfig].buffer, cache);
-			for (let loc of locs.locations) {
-				addDep("loc", loc.id, "mapsquare", square.minor);
-			}
+
+async function* iterateConfigFiles(cache: EngineCache, major: number) {
+	if (cache.legacyData) {
+		let files: Buffer[] | null = null;
+		if (major == cacheMajors.items) { files = cache.legacyData.items; }
+		else if (major == cacheMajors.npcs) { files = cache.legacyData.npcs; }
+		else if (major == cacheMajors.locs) { files = cache.legacyData.locs; }
+		else if (major == cacheMajors.spotanims) { files = cache.legacyData.spotanims; }
+		if (!files) { throw new Error(`cache major ${major} can not be iterated`); }
+		yield* files.map((file, id) => ({ id, file }));
+	} else if (cache.getBuildNr() <= 488) {
+		let arch = await cache.getArchiveById(cacheMajors.config, oldConfigMaps[major]);
+		yield* arch.map(q => ({ id: q.fileid, file: q.buffer }));
+	} else {
+		let locindices = await cache.getCacheIndex(major);
+		let stride = mappedFileIds[major];
+		for (let index of locindices) {
+			if (!index) { continue; }
+			let arch = await cache.getFileArchive(index);
+			yield* arch.map(q => ({ id: index.minor * stride + q.fileid, file: q.buffer }));
 		}
 	}
 }
 
 function chunkDeps(data: ChunkData, addDep: DepCallback, addHash: HashCallback) {
-	let squareindex = data.mapsquarex + data.mapsquarez * worldStride;
+	let squareindex = packMapsquare(data.mapsquarex, data.mapsquarez);
 	addHash("mapsquare", squareindex, data.chunkfilehash, data.chunkfileversion);
 	for (let loc of data.rawlocs) {
 		addDep("loc", loc.id, "mapsquare", squareindex);
@@ -134,29 +142,29 @@ const sequenceDeps: DepCollector = async (cache, addDep, addHash) => {
 				addDep("skeleton", seq.skeletal_animation, "sequence", id);
 			}
 			if (seq.frames && seq.frames.length != 0) {
-				addDep("frameset", seq.frames[0].frameidhi, "sequence", id);
+				addDep("frameset", seq.frames[0].framefile, "sequence", id);
 			}
 		}
 	}
 }
 
-function locationMetaHash(loc: objects) {
+function locationMetaHash(loc: locs) {
 	// only hash properties that affect rendering of a loc (3d and minimap)
 	// can ignore dependencies like models since they are already hashed on their own
 	let hash = 0;
 	// collision
-	hash = crc32addInt(+!!loc.probably_nocollision, hash);
-	hash = crc32addInt(+!!loc.maybe_blocks_movement, hash);
-	hash = crc32addInt(+!!loc.maybe_allows_lineofsight, hash);
+	hash = crc32addInt(+!!loc.walkable, hash);
+	hash = crc32addInt(+!!loc.blocks_movement, hash);
+	hash = crc32addInt(+!!loc.allows_lineofsight, hash);
 	// minimap
-	hash = crc32addInt(loc.mapFunction ?? 0, hash);
+	hash = crc32addInt(loc.maplabel ?? 0, hash);
 	hash = crc32addInt(loc.mapscene ?? 0, hash);
 	hash = crc32addInt(+!!loc.deletable, hash);
 	// placement
 	hash = crc32addInt(loc.width ?? 1, hash);
 	hash = crc32addInt(loc.length ?? 1, hash);
 	// anim - currently not rendered, but shouldnt be expensive
-	hash = crc32addInt(loc.probably_animation ?? 0, hash);
+	hash = crc32addInt(loc.animation ?? 0, hash);
 	// name and rightclicks - not rendered, but are included in other layers
 	hash = crc32(Buffer.from(loc.name ?? "", "utf8"), hash);
 	hash = crc32(Buffer.from(loc.actions_0 ?? "", "utf8"), hash);
@@ -178,12 +186,15 @@ const locationDeps: DepCollector = async (cache, addDep, addHash) => {
 			}
 		}
 	} else {
-		for await (let { id, file } of iterateConfigFiles(cache, cacheMajors.objects)) {
-			let loc = parse.object.read(file, cache);
+		for await (let { id, file } of iterateConfigFiles(cache, cacheMajors.locs)) {
+			let loc = parse.loc.read(file, cache);
 			// addHash("loc", id, crc32(file), 0);
 			addHash("loc", id, locationMetaHash(loc), 0);
-			if (loc.probably_animation) {
-				addDep("sequence", loc.probably_animation, "loc", id);
+			if (loc.animation) {
+				addDep("sequence", loc.animation, "loc", id);
+			}
+			if (loc.animVariations && loc.animVariations.length >= 1) {
+				addDep("sequence", loc.animVariations[0].animid, "loc", id);
 			}
 			if (loc.models) {
 				for (let group of loc.models) {
@@ -240,7 +251,7 @@ const animgroupDeps: DepCollector = async (cache, addDep, addHash) => {
 	for (let file of animgroupfiles) {
 		addHash("animgroup", file.fileid, crc32(file.buffer), 0);
 		let animgroup = parse.animgroupConfigs.read(file.buffer, cache);
-		let anim = animgroup.unknown_26 ?? animgroup.baseAnims?.idle;
+		let anim = animgroup.baseAnims?.idle;
 		if (anim) {
 			addDep("sequence", anim, "animgroup", file.fileid);
 		}
@@ -328,8 +339,7 @@ const skeletonDeps: DepCollector = async (cache, addDep, addHash) => {
 	for (let skelindex of skelindices) {
 		if (!skelindex) { continue; }
 		addHash("skeleton", skelindex.minor, skelindex.crc, skelindex.version);
-		let file = await cache.getFile(skelindex.major, skelindex.minor, skelindex.crc);
-		let skel = parse.skeletalAnim.read(file, cache);
+		let skel = await cache.getObject("skeletons", skelindex.minor);
 		addDep("framebase", skel.framebase, "skeleton", skelindex.minor);
 	}
 }
@@ -342,7 +352,7 @@ const framesetDeps: DepCollector = async (cache, addDep, addHash) => {
 		let arch = await cache.getFileArchive(index);
 		if (arch.length != 0) {
 			let frame0 = parse.frames.read(arch[0].buffer, cache);
-			addDep("framebase", frame0.probably_framemap_id, "frameset", index.minor);
+			addDep("framebase", frame0.framemap_id, "frameset", index.minor);
 		}
 	}
 }
@@ -357,8 +367,8 @@ const modelDeps: DepCollector = async (cache, addDep, addHash, opts) => {
 		// 	let file = await cache.getFile(modelindex.major, modelindex.minor, modelindex.crc);
 		// 	let model = parse.models.read(file, cache);
 		// 	for (let mesh of model.meshes) {
-		// 		if (mesh.materialArgument != 0) {
-		// 			addDep("material", mesh.materialArgument - 1, "model", modelindex.minor);
+		// 		if (mesh.material != -1) {
+		// 			addDep("material", mesh.material, "model", modelindex.minor);
 		// 		}
 		// 	}
 		// }
@@ -537,7 +547,7 @@ export class DependencyGraph {
 
 	insertMapChunk(data: ChunkData) {
 		chunkDeps(data, this.addDep.bind(this), this.addHash.bind(this));
-		let squareindex = data.mapsquarex + data.mapsquarez * worldStride;
+		let squareindex = packMapsquare(data.mapsquarex, data.mapsquarez);
 		return this.makeDeptName("mapsquare", squareindex);
 	}
 

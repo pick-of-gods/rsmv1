@@ -1,13 +1,11 @@
-import { DecodeState, getDebug } from "../opcode_reader";
+import { DecodeState, getDebug } from "../parser/opcode_reader";
 import { CacheFileSource, CacheIndex, SubFile } from "../cache";
-import { JsonBasedFile } from "./filetypes";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
-import { FileParser } from "../opdecoder";
+import { FileParser, JsonBasedFile } from "../parser/jsondecoders";
 import { compareCacheMajors } from "./cachediff";
 import { Openrs2CacheSource, validOpenrs2Caches } from "../cache/openrs2loader";
 import { cacheMajors } from "../constants";
 import { FileRange } from "../utils";
-import { EngineCache } from "../3d/modeltothree";
 
 
 export type DecodeErrorJson = {
@@ -50,7 +48,7 @@ export async function testDecodeHistoric(output: ScriptOutput, outdir: ScriptFS,
 		cacheMajors.materials,//works up to different material system in 2013
 		cacheMajors.items,//~2012
 		cacheMajors.npcs,//2008
-		cacheMajors.objects,//~2016, breaks on morphs
+		cacheMajors.locs,//~2016, breaks on morphs
 		cacheMajors.mapsquares,
 		cacheMajors.models,//not used before 2018
 		cacheMajors.oldmodels//~2015
@@ -132,7 +130,7 @@ export async function testDecodeHistoric(output: ScriptOutput, outdir: ScriptFS,
 	}
 }
 
-export async function testDecode(output: ScriptOutput, outdir: ScriptFS, source: CacheFileSource, mode: JsonBasedFile, ranges: FileRange[], opts: ReturnType<typeof defaultTestDecodeOpts>) {
+export async function testDecode(output: ScriptOutput, outdir: ScriptFS, source: CacheFileSource, mode: JsonBasedFile<any>, ranges: FileRange[], opts: ReturnType<typeof defaultTestDecodeOpts>) {
 	const { skipMinorAfterError, skipFilesizeAfterError, memlimit, orderBySize } = opts;
 	let memuse = 0;
 	let errminors: number[] = [];
@@ -143,7 +141,6 @@ export async function testDecode(output: ScriptOutput, outdir: ScriptFS, source:
 
 	let fileiter: () => AsyncGenerator<DecodeEntry>;
 
-	await mode.prepareDump?.(source);
 	let files = (await Promise.all(ranges.map(q => mode.lookup.logicalRangeToFiles(source, q.start, q.end)))).flat();
 
 	//pre-sort to get more small file under mem limit

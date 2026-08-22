@@ -1,12 +1,12 @@
 import { TypedEmitter } from "../utils";
 import { useEffect } from "react";
 import * as React from "react";
-import { UIContext } from "./maincomponents";
-import { TabStrip } from "./commoncontrols";
+import { DomWrap, TabStrip, useForceUpdate, useForceUpdateDebounce } from "./commoncontrols";
 import { showModal } from "./jsonsearch";
-import VR360Viewer from "../libs/vr360viewer";
 import { CLIScriptFS, ScriptFS, ScriptOutput, ScriptState } from "../scriptrunner";
 import path from "path";
+import { UIRootContext } from "./maincomponents";
+import { boundMethod } from "autobind-decorator";
 
 //see if we have access to a valid electron import
 let electron: typeof import("electron/renderer") | null = (() => {
@@ -256,13 +256,15 @@ export class UIScriptFS extends TypedEmitter<{ writefile: string, unlink: string
 }
 
 export class UIScriptOutput extends TypedEmitter<{ log: string, statechange: undefined, newuifs: ScriptFS }> implements ScriptOutput {
-	state: ScriptState = "running";
+	state: ScriptState = "waiting";
 	logs: string[] = [];
 	outputui: HTMLElement | null = null;
 	fs: Record<string, UIScriptFS>;
 
+	@boundMethod
 	log(...args: any[]) {
-		let str = args.join(" ");
+		let timestamp = new Date().toLocaleTimeString('en-GB', { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+		let str = `[${timestamp}] ${args.join(" ")}`;
 		this.logs.push(str);
 		this.emit("log", str);
 	}
@@ -289,6 +291,7 @@ export class UIScriptOutput extends TypedEmitter<{ log: string, statechange: und
 	}
 
 	async run<ARGS extends any[], RET extends any>(fn: (output: ScriptOutput, ...args: ARGS) => Promise<RET>, ...args: ARGS): Promise<RET | null> {
+		this.setState("running");
 		try {
 			return await fn(this, ...args);
 		} catch (e) {
@@ -306,75 +309,7 @@ export class UIScriptOutput extends TypedEmitter<{ log: string, statechange: und
 	}
 }
 
-function forceUpdateReducer(i: number) { return i + 1; }
-export function useForceUpdate() {
-	const [, forceUpdate] = React.useReducer(forceUpdateReducer, 0);
-	return forceUpdate;
-}
-
-export function useForceUpdateDebounce(delay = 50) {
-	const forceUpdate = useForceUpdate();
-	let ref = React.useRef(() => { });
-	React.useMemo(() => {
-		let timer = 0;
-		let tick = () => {
-			timer = 0;
-			forceUpdate();
-		}
-		ref.current = () => {
-			if (!timer) {
-				timer = +setTimeout(tick, delay);
-			}
-		}
-		return () => {
-			clearTimeout(timer);
-			timer = 0;
-		}
-	}, [forceUpdate, ref]);
-	return ref.current;
-}
-
-export function VR360View(p: { img: string | ImageData | TexImageSource }) {
-	let viewer = React.useRef<VR360Viewer | null>(null);
-	if (!viewer.current) {
-		viewer.current = new VR360Viewer(p.img);
-		viewer.current.cnv.style.width = "100%";
-		viewer.current.cnv.style.height = "100%";
-	}
-
-	let currentimg = React.useRef(p.img);
-	if (p.img != currentimg.current) {
-		viewer.current.setImage(p.img);
-		currentimg.current = p.img;
-	}
-
-	React.useEffect(() => () => viewer.current?.free(), []);
-
-	let wrapper = React.useRef<HTMLElement | null>(null);
-	let ref = (el: HTMLElement | null) => {
-		viewer.current?.cnv && el && el.appendChild(viewer.current?.cnv);
-		wrapper.current = el;
-	}
-
-	return (
-		<React.Fragment>
-			<div>
-				<input type="button" className="sub-btn" value="Fullscreen" onClick={() => wrapper.current?.requestFullscreen()} />
-			</div>
-			<div ref={ref} style={{ position: "relative", paddingBottom: "60%" }} />
-		</React.Fragment>
-	)
-}
-
-export function DomWrap(p: { el: HTMLElement | DocumentFragment | null | undefined, tagName?: "div" | "td" | "span" | "p", style?: React.CSSProperties, className?: string }) {
-	let ref = (el: HTMLElement | null) => {
-		p.el && el && el.replaceChildren(p.el);
-	}
-	let Tagname = p.tagName ?? "div";
-	return <Tagname ref={ref} style={p.style} className={p.className} />;
-}
-
-export function OutputUI(p: { output?: UIScriptOutput | null, ctx: UIContext }) {
+export function OutputUI(p: { output?: UIScriptOutput | null }) {
 	let [tab, setTab] = React.useState<"console" | string>("console");
 
 	let forceUpdate = useForceUpdateDebounce();
@@ -396,33 +331,29 @@ export function OutputUI(p: { output?: UIScriptOutput | null, ctx: UIContext }) 
 	for (let fsname in p.output?.fs) { tabs["fs-" + fsname] = fsname; }
 
 	return (
-		<div>
-			<div>
-				Script state: {p.output.state}
-				{p.output.state == "running" && <input type="button" className="sub-btn" value="cancel" onClick={e => p.output?.setState("canceled")} />}
-			</div>
+		<>
+			<UIScriptStatus output={p.output} />
 			{p.output.outputui && <input type="button" className="sub-btn" value="Script ui" onClick={e => showModal({ title: "Script output" }, <DomWrap el={p.output?.outputui} />)} />}
 			<TabStrip value={tab} onChange={setTab as any} tabs={tabs} />
 			{tab == "console" && <UIScriptConsole output={p.output} />}
-			{selectedfs && <UIScriptFiles fs={selectedfs} ctx={p.ctx} />}
-		</div>
+			{selectedfs && <UIScriptFiles fs={selectedfs} />}
+		</>
 	)
 }
 
-export function UIScriptFiles(p: { fs?: UIScriptFS | null, ctx: UIContext }) {
-	const initialMaxlist = 4000;
-	let [maxlist, setMaxlist] = React.useState(initialMaxlist);
+export function UIScriptFiles(p: { fs?: UIScriptFS | null }) {
+	let ctx = React.useContext(UIRootContext);
 	let [folder, setfolder] = React.useState("");
 	let [hasbacking, setbacking] = React.useState(false);
 	let queueRender = useForceUpdateDebounce(50);
 	let [files, folders, addfile, addfolder] = React.useMemo(() => {
-		let files = new Set<string>();
+		let files = new Map<string, string>();
 		let folders = new Set<string>();
 		let init = async () => {
 			if (p.fs) {
 				let all = await p.fs.readDir(folder);
 				for (let entry of all) {
-					if (entry.kind == "file") { files.add(entry.name); }
+					if (entry.kind == "file") { files.set(entry.name, entry.name); }
 					if (entry.kind == "directory") { folders.add(entry.name); }
 				}
 			} else {
@@ -443,7 +374,7 @@ export function UIScriptFiles(p: { fs?: UIScriptFS | null, ctx: UIContext }) {
 		}
 		let addfile = (name: string) => {
 			if (name.startsWith(folder) && name.indexOf("/", folder.length + 1) == -1) {
-				files.add(name.slice(folder.length));
+				files.set(name.slice(folder.length), name.slice(folder.length));
 				queueRender();
 			}
 		}
@@ -465,36 +396,9 @@ export function UIScriptFiles(p: { fs?: UIScriptFS | null, ctx: UIContext }) {
 
 	let openFile = React.useCallback(async (name: string) => {
 		let data = await p.fs!.readFileBuffer(`${folder}/${name}`);
-		p.ctx.openFile({ fs: p.fs!, name, data });
-	}, [p.fs, p.ctx, folder]);
+		ctx.openFile({ type: "file", fs: p.fs!, name, data });
+	}, [p.fs, ctx, folder]);
 
-	let listkeydown = React.useCallback((e: React.KeyboardEvent) => {
-		if (p.fs && p.ctx.openedfile && e.key == "ArrowDown" || e.key == "ArrowUp") {
-			e.preventDefault();
-			//bit of a yikes, map behaves as a single linked list and i'm trying to not
-			//piss of the god of JIT by writing a custom iterator
-			let previous: string | null = null;
-			let match: string | null = null;
-			let grabnext = false;
-			for (let file of files) {
-				if (grabnext) {
-					match = file;
-					break;
-				} else if (file == p.ctx.openedfile?.name) {
-					if (e.key == "ArrowUp") {
-						match = previous;
-						break;
-					} else {
-						grabnext = true;
-					}
-				}
-				previous = file;
-			}
-			if (match) {
-				openFile(match);
-			}
-		}
-	}, [p.fs, files, openFile])
 
 	//expose the fs to script, but make sure we don't leak it after it's gone from ui
 	useEffect(() => {
@@ -519,12 +423,6 @@ export function UIScriptFiles(p: { fs?: UIScriptFS | null, ctx: UIContext }) {
 				<div key={subfolder} onClick={e => setfolder(`${folder}/${subfolder}`)}>{subfolder}/</div>
 			)
 		}
-		for (let name of files) {
-			if (filelist.length > maxlist) { break; }
-			filelist.push(
-				<div key={name} onClick={e => openFile(name)} style={name == p.ctx.openedfile?.name ? { background: "black" } : undefined}>{name}</div>
-			);
-		}
 
 		let clicksave = async () => {
 			if (!p.fs) { return; }
@@ -542,6 +440,9 @@ export function UIScriptFiles(p: { fs?: UIScriptFS | null, ctx: UIContext }) {
 			setbacking(true);
 		}
 
+		let visibleuitab = ctx.openedTabs[ctx.activeTabIndex];
+		let openedfile = (visibleuitab?.type == "file" && visibleuitab.fs == p.fs) ? visibleuitab.name : null;
+
 		//TODO file dowload counter
 		return (
 			<div>
@@ -556,14 +457,76 @@ export function UIScriptFiles(p: { fs?: UIScriptFS | null, ctx: UIContext }) {
 						])}
 					</div>
 				)}
-				{files.size > maxlist && <div>Only showing first {maxlist} files</div>}
-				<div tabIndex={0} onKeyDownCapture={listkeydown}>
-					{filelist}
-					{files.size > maxlist && <input type="button" className="sub-btn" onClick={e => setMaxlist(maxlist + 4000)} value={`Show more(${maxlist} / ${files.size})`} />}
-				</div>
+				{filelist}
+				<FileListView files={files} selected={openedfile} onSelect={openFile} />
 			</div>
 		);
 	}
+}
+
+export function FileListView<T>(p: { files: Map<T, string>, selected: T | null, onSelect?: (name: T) => void }) {
+	const initialMaxlist = 4000;
+	let [maxlist, setMaxlist] = React.useState(initialMaxlist);
+
+	let listkeydown = React.useCallback((e: React.KeyboardEvent) => {
+		if (p.selected && (e.key == "ArrowDown" || e.key == "ArrowUp")) {
+			e.preventDefault();
+			//bit of a yikes, map behaves as a single linked list and i'm trying to not
+			//piss of the god of JIT by writing a custom iterator
+			let previous: T | null = null;
+			let match: T | null = null;
+			let grabnext = false;
+			for (let [key, name] of p.files) {
+				if (grabnext) {
+					match = key;
+					break;
+				} else if (key == p.selected) {
+					if (e.key == "ArrowUp") {
+						match = previous;
+						break;
+					} else {
+						grabnext = true;
+					}
+				}
+				previous = key;
+			}
+			if (match) {
+				p.onSelect?.(match);
+			}
+		}
+	}, [p.files, p.selected, p.onSelect]);
+
+	let filelist: React.ReactNode[] = [];
+	let index = 0;
+	for (let [key, name] of p.files) {
+		if (filelist.length > maxlist) { break; }
+		filelist.push(
+			<div key={index++} onClick={e => p.onSelect?.(key)} style={key == p.selected ? { background: "black" } : undefined}>{name}</div>
+		);
+	}
+
+	return (<>
+		{p.files.size > maxlist && <div>Only showing first {maxlist}/{p.files.size} files</div>}
+		<div tabIndex={0} onKeyDownCapture={listkeydown}>
+			{filelist}
+			{p.files.size > maxlist && <input type="button" className="sub-btn" onClick={e => setMaxlist(maxlist + 4000)} value={`Show more(${maxlist} / ${p.files.size})`} />}
+		</div>
+	</>);
+}
+
+export function UIScriptStatus(p: { output: UIScriptOutput }) {
+	let forceUpdate = useForceUpdate();
+	useEffect(() => {
+		p.output.on("statechange", forceUpdate);
+		return () => { p.output.off("statechange", forceUpdate); }
+	}, [p.output]);
+
+	return (
+		<div>
+			Script state: {p.output.state}
+			{p.output.state == "running" && <input type="button" className="sub-btn" value="cancel" onClick={e => p.output?.setState("canceled")} />}
+		</div>
+	);
 }
 
 export function UIScriptConsole(p: { output?: UIScriptOutput | null }) {
@@ -574,7 +537,11 @@ export function UIScriptConsole(p: { output?: UIScriptOutput | null }) {
 			let onlog = (e: string) => {
 				let line = document.createElement("div");
 				line.innerText = e;
+				let isnearbottom = el!.scrollHeight - el!.scrollTop - el!.clientHeight < 20;
 				el!.appendChild(line);
+				if (isnearbottom) {
+					el!.scrollTop = el!.scrollHeight;
+				}
 			}
 			p.output.on("log", onlog);
 			p.output.logs.forEach(onlog);
@@ -586,6 +553,6 @@ export function UIScriptConsole(p: { output?: UIScriptOutput | null }) {
 	}, [p.output, el]);
 
 	return (
-		<div ref={setEl} />
+		<div ref={setEl} className="mv-script-console" />
 	);
 }

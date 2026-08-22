@@ -12,6 +12,7 @@ export type items = {
 	rotation_1?: number | null
 	modelTranslate_0?: number | null
 	modelTranslate_1?: number | null
+	baseModelList?: (number|number)[] | null
 	unknown_0A?: number | null
 	stackable_1?: true | null
 	value?: number | null
@@ -67,56 +68,56 @@ export type items = {
 	category?: number | null
 	rotation_2?: number | null
 	dummyItem?: number | null
-	noteData?: number | null
-	noteTemplate?: number | null
-	stack_info_0?: [
-		number,
-		number,
-	] | null
-	stack_info_1?: [
-		number,
-		number,
-	] | null
-	stack_info_2?: [
-		number,
-		number,
-	] | null
-	stack_info_3?: [
-		number,
-		number,
-	] | null
-	stack_info_4?: [
-		number,
-		number,
-	] | null
-	stack_info_5?: [
-		number,
-		number,
-	] | null
-	stack_info_6?: [
-		number,
-		number,
-	] | null
-	stack_info_7?: [
-		number,
-		number,
-	] | null
-	stack_info_8?: [
-		number,
-		number,
-	] | null
-	stack_info_9?: [
-		number,
-		number,
-	] | null
+	noteData_old?: number | null
+	noteTemplate_old?: number | null
+	stack_info_old_0?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_1?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_2?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_3?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_4?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_5?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_6?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_7?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_8?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_old_9?: {
+		icon: number,
+		count: number,
+	} | null
 	scale_0?: number | null
 	scale_1?: number | null
 	scale_2?: number | null
 	ambiance?: number | null
 	contrast?: number | null
 	team?: number | null
-	loanId?: number | null
-	loanTemplate?: number | null
+	loanId_old?: number | null
+	loanTemplate_old?: number | null
 	male_translate?: [
 		number,
 		number,
@@ -148,8 +149,8 @@ export type items = {
 		number,
 	][] | null
 	pickSizeShift?: number | null
-	bindLink?: number | null
-	bindTemplate?: number | null
+	bindLink_old?: number | null
+	bindTemplate_old?: number | null
 	ground_actions_cursor_0?: number | null
 	ground_actions_cursor_1?: number | null
 	ground_actions_cursor_2?: number | null
@@ -162,8 +163,8 @@ export type items = {
 	widget_actions_cursor_4?: number | null
 	dummy?: true | null
 	randomizeGroundPos?: true | null
-	combine_info?: number | null
-	combine_template?: number | null
+	combine_info_old?: number | null
+	combine_template_old?: number | null
 	combine_num_required?: number | null
 	combine_shard_name?: string | null
 	neverStackable?: true | null
@@ -174,6 +175,55 @@ export type items = {
 		number,
 		number,
 	] | null
+	noteDataIcon?: number | null
+	stack_info_0?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_1?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_2?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_3?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_4?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_5?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_6?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_7?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_8?: {
+		icon: number,
+		count: number,
+	} | null
+	stack_info_9?: {
+		icon: number,
+		count: number,
+	} | null
+	noteData?: number | null
+	noteTemplate?: number | null
+	loanId?: number | null
+	loanTemplate?: number | null
+	bindLink?: number | null
+	bindTemplate?: number | null
+	combine_info?: number | null
+	combine_template?: number | null
 	extra?: {
 		prop: number,
 		intvalue: number | null,

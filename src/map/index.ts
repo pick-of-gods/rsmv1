@@ -1,13 +1,13 @@
 
 import { ThreeJsRenderer } from "../viewer/threejsrender";
-import { ParsemapOpts, MapRect, worldStride, parseMapsquare } from "../3d/mapsquare";
-import { CacheFileSource } from "../cache";
+import { ParsemapOpts, MapRect, parseMapsquare } from "../3d/mapsquare";
+import { CacheFileSource, getCacheVersionFingerprint } from "../cache";
 import { cacheMajors } from "../constants";
-import { parse } from "../opdecoder";
+import { parse } from "../parser/jsondecoders";
 import { EngineCache, ThreejsSceneCache } from "../3d/modeltothree";
 import { DependencyGraph } from "../scripts/dependencies";
 import { ScriptOutput } from "../scriptrunner";
-import { delay, stringToFileRange, trickleTasks } from "../utils";
+import { delay, packMapsquare, stringToFileRange, trickleTasks } from "../utils";
 import { mapsquareFloorDependencies, mapsquareLocDependencies, mapsquareVisuals } from "./chunksummary";
 import { RSMapChunk } from "../3d/scene/mapchunk";
 import { MapRender, SymlinkCommand, VersionFilter } from "./backends";
@@ -141,8 +141,7 @@ async function mapAreaPreset(filesource: CacheFileSource, areaArgument: string) 
 		if (areaArgument == "main") {
 
 			//enums 708 seems to be the map select dropdown in-game
-			let file = await filesource.getFileById(cacheMajors.enums, 708);
-			let mapenum = parse.enums.read(file, filesource);
+			let mapenum = await filesource.getObject("enums", 708);
 
 			let files = await filesource.getArchiveById(cacheMajors.worldmap, 0);
 			mask = mapenum.intArrayValue2!.values
@@ -206,16 +205,7 @@ export async function runMapRender(output: ScriptOutput, filesource: CacheFileSo
 		//openrs2 and sqlite caches at will without 100% knowing the build number
 		//and newer game updates rarely update build nr
 		//do a quick search of common cache indices
-		let maxtime = 0;
-		for (let major of [cacheMajors.mapsquares, cacheMajors.items, cacheMajors.npcs, cacheMajors.objects, cacheMajors.config]) {
-			let index = await filesource.getCacheIndex(major);
-			for (let entry of index) {
-				if (entry && entry.version > maxtime) {
-					maxtime = entry.version;
-				}
-			}
-		}
-		versionid = maxtime;
+		versionid = await getCacheVersionFingerprint(filesource);
 	}
 	await config.beginMapVersion(versionid);
 
@@ -519,7 +509,7 @@ export class SimpleHasher {
 	getsubhash(x: number, z: number) {
 		let h = this.subhashes.find(q => q.x == x && q.z == z);
 		if (!h) {
-			let hash = this.depstracker.hashDependencies(this.depstracker.makeDeptName("mapsquare", x + z * worldStride));
+			let hash = this.depstracker.hashDependencies(this.depstracker.makeDeptName("mapsquare", packMapsquare(x, z)));
 			this.subhashes.push({ x, z, hash });
 			return hash;
 		} else {
@@ -539,7 +529,7 @@ export class SimpleHasher {
 		let exists = false;
 		for (let z = rect.z; z < rect.z + rect.zsize; z++) {
 			for (let x = rect.x; x < rect.x + rect.xsize; x++) {
-				exists ||= this.depstracker.hasEntry("mapsquare", x + z * worldStride);
+				exists ||= this.depstracker.hasEntry("mapsquare", packMapsquare(x, z));
 			}
 		}
 		return exists;

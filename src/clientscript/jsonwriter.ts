@@ -1,7 +1,7 @@
 import { clientscript } from "../../generated/clientscript";
 import { getOrInsert } from "../utils";
 import { AstNode, ClientScriptFunction } from "./ast";
-import { ClientscriptObfuscation } from "./callibrator";
+import { ClientscriptObfuscation } from "./callibration/callibrator";
 import { branchInstructionsOrJump, namedClientScriptOps, StackDiff, ClientScriptOp, getOpName, makeop, pushOrPopLocalOps, makejump, SwitchJumpTable, StackList, variableSources, popDiscardOps } from "./definitions";
 
 const tmplocaloffset = 0x10000;
@@ -94,7 +94,7 @@ intrinsics.set("opnametoid", {
         let endlabel = makeop(namedClientScriptOps.jump, 0);
         ctx.declareLabel(endlabel);
 
-        for (let [id, opinfo] of ctx.calli.decodedMappings) {
+        for (let [id, opinfo] of ctx.calli.ops) {
             let name = getOpName(id).toLowerCase();
             //strcomp(opname,string0)==0
             body.push(makeop(namedClientScriptOps.pushconst, 2, name));
@@ -267,7 +267,7 @@ intrinsics.set("op", {
         body.push(makeop(namedClientScriptOps.printmessage));
         body.push(makejump(endlabel));
 
-        for (let id of ctx.calli.decodedMappings.keys()) {
+        for (let id of ctx.calli.ops.keys()) {
             let opid = +id;
             if (branchInstructionsOrJump.includes(opid)) { continue; }
             if (opid == namedClientScriptOps.switch) { continue; }

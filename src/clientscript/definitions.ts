@@ -1,17 +1,18 @@
-import { cacheConfigPages } from "../constants";
-import { rs3opnames } from "./opnames";
+import { cacheConfigPages, internalNameFiles, vartypeReverseMap } from "../constants";
+import { rs3opnames } from "./callibration/opnames";
+import { vartypes } from "../constants";
 
 export const variableSources = {
-    player: { key: 0, index: cacheConfigPages.varplayer },
-    npc: { key: 1, index: cacheConfigPages.varnpc },
-    client: { key: 2, index: cacheConfigPages.varclient },
-    world: { key: 3, index: cacheConfigPages.varworld },
-    region: { key: 4, index: cacheConfigPages.varregion },
-    object: { key: 5, index: cacheConfigPages.varobject },
-    clan: { key: 6, index: cacheConfigPages.varclan },
-    clansettings: { key: 7, index: cacheConfigPages.varclansettings },
+    player: { key: 0, index: cacheConfigPages.varplayer, namefile: internalNameFiles.var_player },
+    npc: { key: 1, index: cacheConfigPages.varnpc, namefile: internalNameFiles.var_npc },
+    client: { key: 2, index: cacheConfigPages.varclient, namefile: internalNameFiles.var_client },
+    world: { key: 3, index: cacheConfigPages.varworld, namefile: -1 },
+    region: { key: 4, index: cacheConfigPages.varregion, namefile: -1 },
+    object: { key: 5, index: cacheConfigPages.varobject, namefile: internalNameFiles.var_object },
+    clan: { key: 6, index: cacheConfigPages.varclan, namefile: internalNameFiles.var_clan },
+    clansettings: { key: 7, index: cacheConfigPages.varclansettings, namefile: internalNameFiles.var_clan_setting },
     // campaign: { key: 8, index: cacheConfigPages.varcampaign },//seems incorrect after 30oct2023
-    playergroup: { key: 9, index: cacheConfigPages.varplayergroup }//not sure about 75
+    playergroup: { key: 9, index: cacheConfigPages.varplayergroup, namefile: internalNameFiles.var_player_group }//not sure about 75
 };
 export const namedClientScriptOps = {
     //old caches only
@@ -106,160 +107,6 @@ export const namedClientScriptOps = {
     printmessage: 3100
 }
 
-// from runestar cs2-rs3
-export const subtypes = {
-    int: 0,
-    boolean: 1,
-    type_2: 2,
-    quest: 3,
-    questhelp: 4,
-    cursor: 5,
-    seq: 6,
-    colour: 7,
-    loc_shape: 8,
-    component: 9,
-    idkit: 10,
-    midi: 11,
-    npc_mode: 12,
-    namedobj: 13,
-    synth: 14,
-    type_15: 15,
-    area: 16,
-    stat: 17,
-    npc_stat: 18,
-    writeinv: 19,
-    mesh: 20,
-    maparea: 21,
-    coordgrid: 22,
-    graphic: 23,
-    chatphrase: 24,
-    fontmetrics: 25,
-    enum: 26,
-    type_27: 27,
-    jingle: 28,
-    chatcat: 29,
-    loc: 30,
-    model: 31,
-    npc: 32,
-    obj: 33,
-    player_uid: 34,
-    type_35: 35,
-    string: 36,
-    spotanim: 37,
-    npc_uid: 38,
-    inv: 39,
-    texture: 40,
-    category: 41,
-    char: 42,
-    laser: 43,
-    bas: 44,
-    type_45: 45,
-    collision_geometry: 46,
-    physics_model: 47,
-    physics_control_modifier: 48,
-    clanhash: 49,
-    coordfine: 50,
-    cutscene: 51,
-    itemcode: 53,
-    type_54: 54,
-    mapsceneicon: 55,
-    clanforumqfc: 56,
-    vorbis: 57,
-    verify_object: 58,
-    mapelement: 59,
-    categorytype: 60,
-    social_network: 61,
-    hitmark: 62,
-    package: 63,
-    particle_effector: 64,
-    type_65: 65,
-    particle_emitter: 66,
-    plogtype: 67,
-    unsigned_int: 68,
-    skybox: 69,
-    skydecor: 70,
-    hash64: 71,
-    inputtype: 72,
-    struct: 73,
-    dbrow: 74,
-    type_75: 75,
-    type_76: 76,
-    type_77: 77,
-    type_78: 78,
-    type_79: 79,
-    type_80: 80,
-    type_81: 81,
-    type_83: 83,
-    type_84: 84,
-    type_85: 85,
-    type_86: 86,
-    type_87: 87,
-    type_88: 88,
-    gwc_platform: 89,
-    type_90: 90,
-    type_91: 91,
-    type_92: 92,
-    type_93: 93,
-    bug_template: 94,
-    billing_auth_flag: 95,
-    account_feature_flag: 96,
-    interface: 97,
-    toplevelinterface: 98,
-    overlayinterface: 99,
-    clientinterface: 100,
-    movespeed: 101,
-    material: 102,
-    seqgroup: 103,
-    temp_hiscore: 104,
-    temp_hiscore_length_type: 105,
-    temp_hiscore_display_type: 106,
-    temp_hiscore_contribute_result: 107,
-    audiogroup: 108,
-    audiomixbuss: 109,
-    long: 110,
-    crm_channel: 111,
-    http_image: 112,
-    pop_up_display_behaviour: 113,
-    poll: 114,
-    type_115: 115,
-    type_116: 116,
-    pointlight: 117,
-    player_group: 118,
-    player_group_status: 119,
-    player_group_invite_result: 120,
-    player_group_modify_result: 121,
-    player_group_join_or_create_result: 122,
-    player_group_affinity_modify_result: 123,
-    player_group_delta_type: 124,
-    client_type: 125,
-    telemetry_interval: 126,
-    type_127: 127,
-    type_128: 128,
-    type_129: 129,
-    type_130: 130,
-    achievement: 131,
-    stylesheet: 133,
-    type_138: 138,
-    type_200: 200,
-    type_201: 201,
-    type_202: 202,
-    type_203: 203,
-    type_204: 204,
-    type_205: 205,
-    type_206: 206,
-    type_207: 207,
-    type_208: 208,
-    var_reference: 209,
-
-    //TODO try to remove this, no longer required but still used for unknown subtypes
-    unknown_int: 501,
-    unknown_long: 502,
-    unknown_string: 503,
-    scriptref: 504,
-    scriptsubref: 505
-    //max 511 (9bit) or overflow elsewhere in code
-}
-
 export interface SubCallable {
     scriptname: string;
     originalindex: number;
@@ -289,23 +136,30 @@ export function dependencyGroup(deptype: DependentType, id: number) {
 export function dependencyIndex(subtype: PrimitiveType, index: number) {
     return (primitiveToId(subtype) << 25) | index;
 }
-export function knownDependency(fulltype: number) {
-    return (primitiveToId(typeToPrimitive(fulltype)) << 25) | fulltype;
-}
 export function keyToPrimitive(key: number): PrimitiveType {
     let deptype = (key >> 27) & 7;
-    if (deptype == 0) { return typeToPrimitive(key & 0x1ff); }
+    if (deptype == 0) {
+        return typeToPrimitive(key & 0x1ff);
+    }
     let typekey = (key >> 25) & 3;
     return typekey == 0 ? "int" : typekey == 1 ? "long" : "string";
 }
 export function decomposeKey(key: number) {
     let sourcetype = grouptypekeys[(key >> 27) & 0x7];
-    let stacktype = stacktypekeys[(key >> 25) & 0x3];
-    let group = (key >> 9) & 0xffff;
-    let index = key & 0x1ff;
-    if (sourcetype == "uuid") {
-        index = key & 0x1ffffff;
-        group = 0;
+    let group = 0;
+    let index: number;
+    let stacktype: PrimitiveType;
+    if (sourcetype == "known") {
+        index = key;
+        stacktype = typeToPrimitive(key);
+    } else {
+        stacktype = stacktypekeys[(key >> 25) & 0x3];
+        if (sourcetype == "uuid") {
+            index = key & 0x1ffffff;
+        } else {
+            group = (key >> 9) & 0xffff;
+            index = key & 0x1ff;
+        }
     }
     return [sourcetype, stacktype, group, index] as const;
 }
@@ -313,7 +167,7 @@ export function decomposeKey(key: number) {
 export function debugKey(key: number) {
     let [sourcetype, stackstring, group, index] = decomposeKey(key);
 
-    if (sourcetype == "known") { return `known type ${index} ${Object.entries(subtypes).find(q => q[1] == index)?.[0]}`; }
+    if (sourcetype == "known") { return `known type ${index} ${vartypeReverseMap.get(index)}`; }
     if (sourcetype == "opin") { return `opin ${group} ${getOpName(group)} ${index} ${stackstring}`; }
     if (sourcetype == "opout") { return `opout ${group} ${getOpName(group)} ${index} ${stackstring}`; }
     if (sourcetype == "scriptargvar") { return `script ${group} arg/local ${index} ${stackstring}`; }
@@ -322,7 +176,7 @@ export function debugKey(key: number) {
 }
 globalThis.debugkey = debugKey;
 
-export const typeuuids = {
+export const subtypeuuids = {
     int: dependencyGroup("uuid", 0) | dependencyIndex("int", 0),
     long: dependencyGroup("uuid", 0) | dependencyIndex("long", 0),
     string: dependencyGroup("uuid", 0) | dependencyIndex("string", 0),
@@ -348,40 +202,20 @@ export function longBigIntToJson(long: bigint): [number, number] {
     return [upper, lower];
 }
 
-export function subtypeToTs(subt: number) {
-    let resentry = Object.entries(subtypes).find(q => q[1] == subt);
-    if (!resentry) { return `type_${subt}`; }
-    let res = resentry[0];
-    // if (res == "boolean") { res = "cs2bool"; }
-    if (res == "enum") { res = "cs2enum"; }
-    return res;
-}
-
-export function tsToSubtype(tscode: string) {
-    if (tscode == "cs2bool") { return subtypes.boolean; }
-    if (tscode == "cs2enum") { return subtypes.enum; }
-    if (!Object.hasOwn(subtypes, tscode)) {
-        let m = tscode.match(/^type_(\d+)$/);
-        if (!m) { throw new Error("unknown subtype " + tscode); }
-        return +m[1];
-    }
-    return subtypes[tscode];
-}
-
 const stringtypes = [
-    subtypes.string,
-    subtypes.coordfine,
-    subtypes.unknown_string
+    vartypes.string,
+    vartypes.coordfine,
+    vartypes.unknown_string
 ];
 const longtypes = [
-    subtypes.type_35,
-    subtypes.clanhash,
-    subtypes.clanforumqfc,
-    subtypes.hash64,
-    subtypes.long,
-    subtypes.type_115,
-    subtypes.type_116,
-    subtypes.unknown_long
+    vartypes.type_35,
+    vartypes.clanhash,
+    vartypes.clanforumqfc,
+    vartypes.hash64,
+    vartypes.long,
+    vartypes.type_115,
+    vartypes.type_116,
+    vartypes.unknown_long
 ];
 
 export function typeToPrimitive(typeint: number): PrimitiveType {
@@ -390,9 +224,9 @@ export function typeToPrimitive(typeint: number): PrimitiveType {
     else { return "int"; }
 }
 export function primitiveToUknownExact(stacktype: PrimitiveType) {
-    if (stacktype == "int") { return subtypes.unknown_int; }
-    if (stacktype == "long") { return subtypes.unknown_long; }
-    if (stacktype == "string") { return subtypes.unknown_string; }
+    if (stacktype == "int") { return vartypes.unknown_int; }
+    if (stacktype == "long") { return vartypes.unknown_long; }
+    if (stacktype == "string") { return vartypes.unknown_string; }
     throw new Error(`uknown stack type ${stacktype}`);
 }
 
@@ -445,9 +279,9 @@ export const branchInstructions = [
     ...branchInstructionsLong
 ];
 
-export const binaryOpSymbols = new Map([
-    [namedClientScriptOps.shorting_or, "||"],
-    [namedClientScriptOps.shorting_and, "&&"],
+export const binaryOpSymbols = new Map<number, { str: string, prec: number, intmath: boolean, assoc: "left" | "right" | "none" }>([
+    [namedClientScriptOps.shorting_or, { str: "||", prec: 3, intmath: false, assoc: "left" }],
+    [namedClientScriptOps.shorting_and, { str: "&&", prec: 4, intmath: false, assoc: "left" }],
 
     //compare longs
     // [namedClientScriptOps.branch_not_long, ":!="],
@@ -458,28 +292,21 @@ export const binaryOpSymbols = new Map([
     // [namedClientScriptOps.branch_gt_long, ":>"],
 
     //ints
-    [namedClientScriptOps.branch_not, "!="],
-    [namedClientScriptOps.branch_eq, "=="],
-    [namedClientScriptOps.branch_lteq, "<="],
-    [namedClientScriptOps.branch_gteq, ">="],
-    [namedClientScriptOps.branch_lt, "<"],//make sure shorter ops are after longer ones
-    [namedClientScriptOps.branch_gt, ">"],
+    [namedClientScriptOps.branch_not, { str: "!=", prec: 8, intmath: false, assoc: "left" }],
+    [namedClientScriptOps.branch_eq, { str: "==", prec: 8, intmath: false, assoc: "left" }],
+    [namedClientScriptOps.branch_lteq, { str: "<=", prec: 9, intmath: false, assoc: "left" }],
+    [namedClientScriptOps.branch_gteq, { str: ">=", prec: 9, intmath: false, assoc: "left" }],
+    [namedClientScriptOps.branch_lt, { str: "<", prec: 9, intmath: false, assoc: "left" }],//make sure shorter ops are after longer ones
+    [namedClientScriptOps.branch_gt, { str: ">", prec: 9, intmath: false, assoc: "left" }],
 
     //math
-    [namedClientScriptOps.plus, "+"],
-    [namedClientScriptOps.minus, "-"],
-    [namedClientScriptOps.intdiv, "/"],
-    [namedClientScriptOps.intmul, "*"],
+    [namedClientScriptOps.plus, { str: "+", prec: 11, intmath: true, assoc: "left" }],
+    [namedClientScriptOps.minus, { str: "-", prec: 11, intmath: true, assoc: "left" }],
+    [namedClientScriptOps.intdiv, { str: "/", prec: 12, intmath: true, assoc: "left" }],
+    [namedClientScriptOps.intmul, { str: "*", prec: 12, intmath: true, assoc: "left" }],
 ]);
 
-export const int32MathOps = new Set([
-    namedClientScriptOps.plus,
-    namedClientScriptOps.minus,
-    namedClientScriptOps.intdiv,
-    namedClientScriptOps.intmul
-]);
-
-export const binaryOpIds = new Map([...binaryOpSymbols].map(q => [q[1], q[0]]));
+export const binaryOpIds = new Map([...binaryOpSymbols].map(q => [q[1].str, q[0]]));
 
 export const branchInstructionsOrJump = [
     ...branchInstructions,
@@ -716,49 +543,6 @@ export class StackList {
         }
         return res;
     }
-    toTypeScriptVarlist(withnames: boolean, withtypes: boolean, exacttype?: ExactStack | null) {
-        let res = "";
-        let counts = new StackDiff();
-        for (let i = 0; i < this.values.length; i++) {
-            let part = this.values[i];
-            if (part instanceof StackDiff) { res += part.toTypeScriptVarlist(counts, withnames, withtypes, exacttype); }
-            else if (part == "int" && i + 1 < this.values.length && this.values[i + 1] == "vararg") {
-                //combine int+vararg arguments into a single boundfunction argument
-                if (withnames) { res += `vararg${withtypes ? ": " : ""}`; }
-                if (withtypes) { res += "BoundFunction"; }
-                counts.vararg++;
-                i++;
-            }
-            else if (part == "int") {
-                if (withnames) { res += `int${counts.int}${withtypes ? ": " : ""}`; }
-                if (withtypes) { res += (exacttype ? subtypeToTs(exacttype.int[counts.int]) : "number"); }
-                counts.int++;
-            }
-            else if (part == "long") {
-                if (withnames) { res += `long${counts.long}${withtypes ? ": " : ""}`; }
-                if (withtypes) { res += (exacttype ? subtypeToTs(exacttype.long[counts.long]) : "BigInt"); }
-                counts.long++;
-            }
-            else if (part == "string") {
-                if (withnames) { res += `string${counts.string}${withtypes ? ": " : ""}`; }
-                if (withtypes) { res += (exacttype ? subtypeToTs(exacttype.string[counts.string]) : "string"); }
-                counts.string++;
-            }
-            else throw new Error("unsupported stack type");
-            if (i != this.values.length - 1) { res += ", "; }
-        }
-        // res = res.replace(/,\s?$/, "");
-        return res;
-    }
-    toTypeScriptReturnType(exacttype?: ExactStack | null) {
-        if (this.values.length == 0) {
-            return "void";
-        }
-        if (this.values.length == 1) {
-            return this.toTypeScriptVarlist(false, true, exacttype);
-        }
-        return `[${this.toTypeScriptVarlist(false, true, exacttype)}]`;
-    }
     toJson() { return this.values.map(q => typeof q == "string" ? q : q.toJson()); }
     static fromJson(v: ReturnType<StackList["toJson"]>) {
         return new StackList(v.map(q => typeof q == "string" ? q : StackDiff.fromJson(q)!));
@@ -788,13 +572,13 @@ export class StackList {
         for (let value of this.values) {
             if (value instanceof StackDiff) {
                 if (value.vararg != 0) { throw new Error("vararg doesn't have a vm type"); }
-                for (let i = 0; i < value.int; i++) { res.push(typeuuids.int++); }
-                for (let i = 0; i < value.long; i++) { res.push(typeuuids.long++); }
-                for (let i = 0; i < value.string; i++) { res.push(typeuuids.string++); }
+                for (let i = 0; i < value.int; i++) { res.push(subtypeuuids.int++); }
+                for (let i = 0; i < value.long; i++) { res.push(subtypeuuids.long++); }
+                for (let i = 0; i < value.string; i++) { res.push(subtypeuuids.string++); }
             }
-            else if (value == "int") { res.push(typeuuids.int++); }
-            else if (value == "long") { res.push(typeuuids.long++); }
-            else if (value == "string") { res.push(typeuuids.string++); }
+            else if (value == "int") { res.push(subtypeuuids.int++); }
+            else if (value == "long") { res.push(subtypeuuids.long++); }
+            else if (value == "string") { res.push(subtypeuuids.string++); }
             else throw new Error("vararg doesn't have a vm type");
         }
         return res;
@@ -864,7 +648,20 @@ export class StackInOut {
         return `${this.out.values.join(",")}(${this.in.values.join(",")})`;
     }
     toString() {
-        return `${this.out + "" || "void"}${this.initializedthrough ? "" : "??"}(${this.in})`;
+        let res = `${this.out + "" || "void"}${this.initializedthrough ? "" : "??"}(${this.in})`;
+        if (!this.exactout) {
+            res += " out<??>";
+        } else {
+            let out = this.exactout;
+            res += ` out<${out.int.map(debugKey)}|${out.long.map(debugKey)}|${out.string.map(debugKey)}>`;
+        }
+        if (!this.exactin) {
+            res += " in<??>";
+        } else {
+            let inp = this.exactin;
+            res += ` in<${inp.int.map(debugKey)}|${inp.long.map(debugKey)}|${inp.string.map(debugKey)}>`;
+        }
+        return res;
     }
     toJson() {
         return {
@@ -1007,35 +804,6 @@ export class StackDiff {
         res += "l".repeat(this.long);
         res += "s".repeat(this.string);
         if (this.vararg != 0) { throw new Error("vararg not supported"); }
-        return res;
-    }
-    toTypeScriptVarlist(nameoffset: StackDiff, withnames: boolean, withtypes: boolean, exacttype?: ExactStack | null) {
-        let res = "";
-        for (let i = 0; i < this.int; i++) {
-            if (withnames) { res += `int${nameoffset.int}${withtypes ? ": " : ""}`; }
-            if (withtypes) { res += (exacttype ? subtypeToTs(exacttype.int[nameoffset.int]) : "number"); }
-            res += ", ";
-            nameoffset.int++;
-        }
-        for (let i = 0; i < this.long; i++) {
-            if (withnames) { res += `long${nameoffset.long}${withtypes ? ": " : ""}`; }
-            if (withtypes) { res += (exacttype ? subtypeToTs(exacttype.long[nameoffset.long]) : "BigInt"); }
-            res += ", ";
-            nameoffset.long++;
-        }
-        for (let i = 0; i < this.string; i++) {
-            if (withnames) { res += `string${nameoffset.string}${withtypes ? ": " : ""}`; }
-            if (withtypes) { res += (exacttype ? subtypeToTs(exacttype.string[nameoffset.string]) : "string"); }
-            res += ", ";
-            nameoffset.string++;
-        }
-        for (let i = 0; i < this.vararg; i++) {
-            if (withnames) { res += `vararg${nameoffset.vararg}${withtypes ? ": " : ""}`; }
-            if (withtypes) { res += "BoundFunction"; }
-            res += ", ";
-            nameoffset.vararg++;
-        }
-        res = res.replace(/, $/, "");
         return res;
     }
 }

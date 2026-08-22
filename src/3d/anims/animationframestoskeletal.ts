@@ -1,5 +1,5 @@
 import { cacheMajors } from "../../constants";
-import { parse } from "../../opdecoder";
+import { parse } from "../../parser/jsondecoders";
 import { AnimationClip, Bone, KeyframeTrack, Matrix4, Quaternion, QuaternionKeyframeTrack, Skeleton, SkinnedMesh, Vector3, VectorKeyframeTrack } from "three";
 import { framemaps } from "../../../generated/framemaps";
 import { ThreejsSceneCache } from "../modeltothree";
@@ -71,20 +71,20 @@ async function parseAnimationSequence3(loader: ThreejsSceneCache, sequenceframes
         throw new Error("animation has no frames");
     }
 
-    let framearch = await loader.engine.getArchiveById(cacheMajors.frames, secframe0.frameidhi);
+    let framearch = await loader.engine.getArchiveById(cacheMajors.frames, secframe0.framefile);
 
     let frames = Object.fromEntries(framearch.map(q => [q.fileid, parse.frames.read(q.buffer, loader.engine.rawsource)]));
 
     let orderedframes: frames[] = [];
     for (let seqframe of sequenceframes) {
-        if (frames[seqframe.frameidlow]) {
-            orderedframes.push(frames[seqframe.frameidlow]);
+        if (frames[seqframe.frameindex]) {
+            orderedframes.push(frames[seqframe.frameindex]);
         } else {
-            console.log(`missing animation frame ${seqframe.frameidlow} in sequence ${seqframe.frameidhi}`)
+            console.log(`missing animation frame ${seqframe.frameindex} in frame file ${seqframe.framefile}`)
         }
     }
 
-    let framebase = parse.framemaps.read(await loader.engine.getFileById(cacheMajors.framemaps, orderedframes[0].probably_framemap_id), loader.engine.rawsource);
+    let framebase = await loader.engine.getObject("framemaps", orderedframes[0].framemap_id);
 
     let { actions, rootboneinits } = buildFramebaseSkeleton(framebase);
     let clips = getFrameClips(framebase, orderedframes);

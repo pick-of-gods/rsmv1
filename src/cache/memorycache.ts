@@ -22,11 +22,14 @@ export class CachingFileSource extends CacheFileSource {
     constructor(base: CacheFileSource) {
         super();
         this.rawsource = base;
+        // make them share caches/config
+        this.decodeArgs = base.decodeArgs;
+        this.nameFiles = base.nameFiles;
     }
 
     fetchCachedObject<T>(map: Map<number, CachedObject<T>>, id: number, create: () => Promise<T>, getSize: (obj: T) => number) {
         let bucket = map.get(id);
-        if (!bucket || globalThis.ignoreCache) {
+        if (!bucket) {
             let data = create();
             bucket = {
                 promise: data,

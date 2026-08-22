@@ -1,10 +1,8 @@
 import { crc32, crc32_backward, forge_crcbytes } from "../libs/crc32util";
-import { cacheConfigPages, cacheMajors, lastClassicBuildnr, lastLegacyBuildnr, latestBuildNumber } from "../constants";
-import { parse } from "../opdecoder";
-import { cacheFilenameHash } from "../utils";
+import { cacheConfigPages, cacheMajors, internalNameFiles, internalNameFilesWithVarbit, lastClassicBuildnr, lastLegacyBuildnr, latestBuildNumber } from "../constants";
+import { cacheFileJsonModes, JsonBasedFile, parse } from "../parser/jsondecoders";
+import { cacheFilenameHash, getOrInsert } from "../utils";
 import { parseLegacyArchive } from "./legacycache";
-
-globalThis.ignoreCache = false;
 
 export type SubFile = {
 	offset: number,
@@ -177,26 +175,25 @@ export function unpackBufferArchive(buffer: Buffer, subids: number[], namehashes
 	return subbufs;
 }
 
-export function rootIndexBufferToObject(metaindex: Buffer, source: CacheFileSource) {
+function rootIndexBufferToObject(metaindex: Buffer, source: CacheFileSource) {
 	let index = parse.rootCacheIndex.read(metaindex, source);
-	return index.cachemajors
-		.map(q => {
-			if (q.crc == 0) { return undefined!; }
-			let r: CacheIndex = {
-				major: 255,
-				minor: q.minor,
-				crc: q.crc,
-				version: q.version,
-				size: 0,
-				name: null,
-				subindexcount: q.subindexcount,
-				subindices: [0],
-				subnames: null,
-				uncompressed_crc: 0,
-				uncompressed_size: 0,
-			}
-			return r;
-		});
+	return index.cachemajors.map(q => {
+		if (q.crc == 0) { return undefined!; }
+		let r: CacheIndex = {
+			major: 255,
+			minor: q.minor,
+			crc: q.crc,
+			version: q.version,
+			size: 0,
+			name: null,
+			subindexcount: q.subindexcount,
+			subindices: [0],
+			subnames: null,
+			uncompressed_crc: 0,
+			uncompressed_size: 0,
+		}
+		return r;
+	});
 }
 
 export function indexBufferToObject(major: number, buffer: Buffer, source: CacheFileSource): CacheIndex[] {
@@ -217,7 +214,7 @@ export const mappedFileIds = {
 	[cacheMajors.npcs]: 128,
 	[cacheMajors.structs]: 32,
 	[cacheMajors.enums]: 256,
-	[cacheMajors.objects]: 256,
+	[cacheMajors.locs]: 256,
 	[cacheMajors.sequences]: 128,
 	[cacheMajors.spotanims]: 256,
 	[cacheMajors.achievements]: 128,
@@ -227,7 +224,7 @@ export const mappedFileIds = {
 export const oldConfigMaps = {
 	[cacheMajors.items]: cacheConfigPages.items_old,
 	[cacheMajors.npcs]: cacheConfigPages.npcs_old,
-	[cacheMajors.objects]: cacheConfigPages.locs_old,
+	[cacheMajors.locs]: cacheConfigPages.locs_old,
 	[cacheMajors.spotanims]: cacheConfigPages.spotanim_old
 }
 
@@ -253,9 +250,121 @@ export function archiveToFileId(major: number, minor: number, subfile: number) {
 	return minor * archsize + subfile;
 }
 
+export function parseFileNameList(buffer: Buffer) {
+	let index = 0;
+	let version = buffer.readUInt32BE(index);
+	index += 4;
+	let hasexplicitindex = (version == 2);
+	let nentries = buffer.readUInt32BE(index);
+	index += 4;
+	let textoffset = index + nentries * (4 + (hasexplicitindex ? 4 : 0));
+	let res = new Map<number, string>();
+	let endoffset = 0;
+	for (let i = 0; i < nentries; i++) {
+		let fileid = i;
+		if (hasexplicitindex) {
+			fileid = buffer.readUInt32BE(index);
+			index += 4;
+		}
+		let stringoffset = textoffset + buffer.readUInt32BE(index);
+		index += 4;
+		endoffset = stringoffset;
+		while (endoffset < buffer.length && buffer[endoffset] != 0) { endoffset++; }
+		let name = buffer.toString("latin1", stringoffset, endoffset);
+		res.set(fileid, name);
+	}
+	if (endoffset != buffer.length - 1) {
+		console.log("warning: didn't read entire filename file, remaining: " + (buffer.length - endoffset - 1));
+	}
+	return res;
+}
+async function testnamefilepacking() {
+	let source = globalThis.source as CacheFileSource;
+	let res = {};
+	let allvarbits = new Set<number>();
+	for (let [key, value] of internalNameFilesWithVarbit) {
+		let configindex = await source.getCacheIndex(cacheMajors.config);
+		let entrylist = configindex.at(value)!;
+		let namelist = parseFileNameList(await source.getFile(cacheMajors.filenames, key));
+		let name = Object.entries(internalNameFiles).find(([k, v]) => v == key)?.[0] ?? key;
+
+		let maxid = 0;
+		for (let [id, name] of namelist) {
+			if (!name) { continue; }
+			let isvarbit = name.startsWith("_");
+			if (!isvarbit) {
+				maxid = Math.max(maxid, id);
+			} else {
+				let actualindex = id - maxid - 1;
+				if (allvarbits.has(actualindex)) {
+					console.log("warning: varbit name file collision", actualindex, name, allvarbits.has(actualindex));
+				}
+				allvarbits.add(actualindex);
+			}
+		}
+
+		res[name] = {
+			namecount: namelist.size,
+			maxnameid: Math.max(...namelist.keys()),
+			lastconfig: entrylist.subindices.at(-1),
+			namelist,
+			entrylist
+		};
+	}
+	// @ts-ignore
+	res.allvarbits = allvarbits;
+	return res;
+}
+globalThis.testnamefilepacking = testnamefilepacking;
+
 
 export abstract class CacheFileSource {
 	decodeArgs: Record<string, any> = {};
+	nameFiles: Map<number, Map<number, string> | Promise<Map<number, string>>> = new Map();
+	nameFileVarbits = new Map<number, string>();
+
+	async getInternalNameList(namefile: number) {
+		// special case for varbit names, they are stored in the var name files instead
+		return this.nameFiles.getOrInsertComputed(namefile, async () => {
+			let names: Map<number, string>;
+			if (namefile == internalNameFiles.varbit) {
+				// trigger loading of all var name files, this will populate the varbit name file as well
+				await Promise.all(internalNameFilesWithVarbit.keys().map(key => this.getInternalNameList(key)));
+				names = this.nameFileVarbits;
+			} else {
+				let file = await this.getFile(cacheMajors.filenames, namefile).catch(e => {
+					// console.log("failed to load filename file", namefile, e);
+					return null;
+				});
+				names = (file ? parseFileNameList(file) : new Map<number, string>());
+
+				// special case for var files, they also contain names for varbits that target them
+				if (internalNameFilesWithVarbit.has(namefile)) {
+					let maxid = 0;
+					let varbitstarted = false;
+					for (let [key, name] of names) {
+						let isvarbit = name.startsWith("_");
+						if (isvarbit) {
+							varbitstarted = true;
+						}
+						if (varbitstarted) {
+							this.nameFileVarbits.set(key - maxid - 1, name);
+							names.delete(key);
+						} else {
+							maxid = Math.max(maxid, key);
+						}
+					}
+				}
+			}
+			this.nameFiles.set(namefile, names);
+			return names;
+		});
+	}
+	async getInternalName(namefile: number, index: number) {
+		let names = await this.getInternalNameList(namefile);
+		return names.get(index);
+	}
+
 	getCacheMeta(): { name: string, descr: string, timestamp: Date, otherCaches?: Record<string, string> } {
 		return { name: "unkown", descr: "", timestamp: new Date(0) };
 	}
@@ -287,7 +396,7 @@ export abstract class CacheFileSource {
 
 	async getIndexEntryById(major: number, minor: number) {
 		let index: CacheIndex;
-		if (this.getBuildNr() <= lastLegacyBuildnr) {
+		if (this.getBuildNr() <= lastLegacyBuildnr || (major == 255 && minor == 255)) {
 			index = { major, minor, crc: 0, name: null, subindexcount: 1, subindices: [0], subnames: null, version: 0 };
 		} else {
 			let indexfile = await this.getCacheIndex(major);
@@ -308,6 +417,29 @@ export abstract class CacheFileSource {
 		let match = files.find(q => q.fileid == holderindex.subid);
 		if (!match) { throw new Error(`File ${fileid} in major ${major} not found, (redirected to ${holderindex.major}.${holderindex.minor}.${holderindex.subid})`); }
 		return match.buffer;
+	}
+
+	async getObject<T extends keyof typeof cacheFileJsonModes>(mode: T, id: number | number[])
+		: Promise<typeof cacheFileJsonModes[T] extends JsonBasedFile<infer U> ? U : never> {
+		let modefn = cacheFileJsonModes[mode];
+		let logicalid = Array.isArray(id) ? id : [id];
+		let fileid = modefn.lookup.logicalToFile(this, logicalid);
+		let file: Buffer;
+		if (modefn.lookup.usesArchieves) {
+			let arch = await this.getArchiveById(fileid.major, fileid.minor);
+			let entry = arch.find(q => q.fileid == fileid.subid);
+			if (!entry) { throw new Error(`Logical file ${mode}_${logicalid.join(".")} not found at ${fileid.major}.${fileid.minor}.${fileid.subid}`); }
+			file = entry.buffer;
+		} else {
+			file = await this.getFileById(fileid.major, fileid.minor);
+		}
+		let json = modefn.parser.read(file, this);
+		json.$fileid = logicalid.length == 1 ? logicalid[0] : logicalid;
+		json.$decoder = mode;
+		if (modefn.lookup.internalNamefile !== undefined) {
+			json.$filename = await this.getInternalName(modefn.lookup.internalNamefile, logicalid[0]);
+		}
+		return json;
 	}
 
 	async findFileByName(major: number, name: string) {
@@ -392,4 +524,24 @@ export class CallbackCacheLoader extends DirectCacheFileSource {
 	getCacheMeta() {
 		return { name: "callback", descr: "Cache source based on external getter", timestamp: new Date(0) };
 	}
+}
+
+export async function getCacheVersionFingerprint(filesource: CacheFileSource) {
+	let maxtime = 0;
+	for (let major of [cacheMajors.mapsquares, cacheMajors.items, cacheMajors.npcs, cacheMajors.locs, cacheMajors.config]) {
+		let index = await filesource.getCacheIndex(major);
+		for (let entry of index) {
+			if (entry && entry.version > maxtime) {
+				maxtime = entry.version;
+			}
+		}
+	}
+	// its an old cache, it uses version numbers instead of timestamps
+	if (maxtime < +new Date(2000, 0) / 1000) {
+		// number of files in index 0 (old animation frames) seems a good monotonicly increasing indicator for cache age
+		// most other indices sometimes decrease, or are not updated for some period of time
+		let oldmodelsindex = await filesource.getCacheIndex(0);
+		maxtime = oldmodelsindex.length;
+	}
+	return maxtime;
 }

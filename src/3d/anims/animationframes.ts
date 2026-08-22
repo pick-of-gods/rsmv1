@@ -1,6 +1,6 @@
 import { Stream } from "../../utils";
 import { cacheMajors } from "../../constants";
-import { parse } from "../../opdecoder";
+import { parse } from "../../parser/jsondecoders";
 import { AnimationClip, AnimationMixer, Bone, BufferGeometry, Euler, KeyframeTrack, Matrix4, Object3D, Quaternion, QuaternionKeyframeTrack, Skeleton, SkinnedMesh, Vector3, VectorKeyframeTrack } from "three";
 import { framemaps } from "../../../generated/framemaps";
 import { ThreejsSceneCache } from "../modeltothree";
@@ -101,7 +101,7 @@ export async function parseAnimationSequence4(loader: ThreejsSceneCache, sequenc
 		throw new Error("animation has no frames");
 	}
 
-	let framearch = await loader.engine.getArchiveById(cacheMajors.frames, secframe0.frameidhi);
+	let framearch = await loader.engine.getArchiveById(cacheMajors.frames, secframe0.framefile);
 
 	//some animations seem to use index instead of id, this seems to fix anim on npc 182
 	// let frames = Object.fromEntries(framearch.map((q, i) => [i + 1, parse.frames.read(q.buffer, loader.engine.rawsource)]));
@@ -116,12 +116,12 @@ export async function parseAnimationSequence4(loader: ThreejsSceneCache, sequenc
 	let orderedframes: frames[] = [];
 	for (let i = 0; i < sequenceframes.length; i++) {
 		let seqframe = sequenceframes[i];
-		if (frames[seqframe.frameidlow]) {
+		if (frames[seqframe.frameindex]) {
 			keyframetimeslist.push(endtime);
 			endtime += seqframe.framelength * 0.020;
-			orderedframes.push(frames[seqframe.frameidlow]);
+			orderedframes.push(frames[seqframe.frameindex]);
 		} else {
-			console.log(`missing animation frame ${seqframe.frameidlow} in sequence ${seqframe.frameidhi}`)
+			console.log(`missing animation frame ${seqframe.frameindex} in frame file ${seqframe.framefile}`)
 		}
 	}
 
@@ -129,7 +129,7 @@ export async function parseAnimationSequence4(loader: ThreejsSceneCache, sequenc
 		orderedframes.push(orderedframes[0]);
 		keyframetimeslist.push(endtime);
 	}
-	let framebase = parse.framemaps.read(await loader.engine.getFileById(cacheMajors.framemaps, orderedframes[0].probably_framemap_id), loader.engine.rawsource);
+	let framebase = await loader.engine.getObject("framemaps", orderedframes[0].framemap_id);
 
 	// let { bones } = buildFramebaseSkeleton(framebase);
 	let keyframetimes = new Float32Array(keyframetimeslist);
@@ -340,7 +340,7 @@ export function getFrameClips(framebase: framemaps, framesparsed: frames[]) {
 			flags: framedata.flags,
 			animdata: framedata.animdata,
 			dataindex: 0,
-			baseid: framedata.probably_framemap_id,
+			baseid: framedata.framemap_id,
 			stream: new Stream(Buffer.from(framedata.animdata))
 		};
 	});

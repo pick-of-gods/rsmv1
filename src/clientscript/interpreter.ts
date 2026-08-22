@@ -1,11 +1,9 @@
 import { clientscript } from "../../generated/clientscript"
-import { ClientscriptObfuscation } from "./callibrator";
+import { ClientscriptObfuscation } from "./callibration/callibrator";
 import { ClientScriptOp, StackDiff, StackList, SwitchJumpTable, branchInstructions, getParamOps, knownClientScriptOpNames, longBigIntToJson, longJsonToBigInt, namedClientScriptOps, typeToPrimitive } from "./definitions"
-import { rs3opnames } from "./opnames";
+import { rs3opnames } from "./callibration/opnames";
 import { CS2Api, MAGIC_CONST_CURRENTCOMP, UiRenderContext } from "../scripts/renderrsinterface";
-import { cacheMajors } from "../constants";
-import { parse } from "../opdecoder";
-import { getEnumInt, getStructInt, loadEnum, loadStruct } from "./util";
+import { getEnumInt, getStructInt } from "./util";
 
 
 type ScriptScope = {
@@ -64,8 +62,8 @@ export class ClientScriptInterpreter {
         return comp.api;
     }
     async callscriptid(id: number) {
-        let data = await this.calli.source.getFileById(cacheMajors.clientscript, id);
-        this.callscript(parse.clientscript.read(data, this.calli.source), id);
+        let script = await this.calli.source.getObject("clientscriptops", id);
+        this.callscript(script, id);
     }
     async runToEnd() {
         while (true) {
@@ -190,7 +188,7 @@ export class ClientScriptInterpreter {
         } else if (implemented) {
             res = implemented(this as InterpreterWithScope, op);
         } else {
-            let opinfo = this.calli.decodedMappings.get(op.opcode);
+            let opinfo = this.calli.ops.get(op.opcode);
             if (!opinfo) { throw new Error(`Uknown op with opcode ${op.opcode}`); }
             if (!opinfo.stackinfo.initializedthrough) { throw new Error(`Unknown params/returns for op ${op.opcode}`); }
             this.popStacklist(opinfo.stackinfo.in);
@@ -222,7 +220,7 @@ export class ClientScriptInterpreter {
                 res += `${index} ${index == this.scope.index ? ">>" : "  "} `;
                 let op = this.scope.ops[index];
                 if (op) {
-                    let opinfo = this.calli.decodedMappings.get(op.opcode);
+                    let opinfo = this.calli.ops.get(op.opcode);
                     let name = knownClientScriptOpNames[op.opcode];
                     res += `${name.padEnd(12, " ").slice(0, 12)} ${op.imm} ${op.imm_obj ?? ""}\n`;
                 } else {
@@ -301,7 +299,7 @@ implementedops.set(namedClientScriptOps.enum_getvalue, async inter => {
     let keytype = inter.popint();
 
     let outprim = typeToPrimitive(outtype);
-    let enumjson = await loadEnum(inter.calli.source, enumid);
+    let enumjson = await inter.calli.source.getObject("enums", enumid);
 
     if (outprim != "int") { throw new Error("enum_getvalue can only look up int values"); }
 
@@ -312,7 +310,7 @@ implementedops.set(namedClientScriptOps.struct_getparam, async inter => {
     let param = inter.popint();
     let structid = inter.popint();
 
-    let json = await loadStruct(inter.calli.source, structid).catch(q => null);
+    let json = await inter.calli.source.getObject("structs", structid).catch(q => null);
     let res = getStructInt(inter.calli.parammeta, json, param);
     inter.pushint(res);
 });
@@ -326,7 +324,7 @@ implementedops.set(namedClientScriptOps.dbrow_getfield, inter => {
     let columnid = (tablefield >> 4) & 0xff;
     let subfield = tablefield & 0xf;
     let table = inter.calli.dbtables.get(dbtable);
-    let column = table?.unk01?.columndata.find(q => q.id == columnid) ?? table?.unk02?.columndata.find(q => q.id == columnid);
+    let column = table?.columndata?.find(q => q.id == columnid);
     if (!column) { throw new Error(`couldn't find dbtable ${dbtable}.${columnid}`); }
     let types = (subfield != 0 ? [column.columns[subfield - 1].type] : column.columns.map(q => q.type));
     inter.pushStackdiff(new StackList(types.map(typeToPrimitive)).toStackDiff());
@@ -429,7 +427,7 @@ namedimplementations.set("INT_TO_LONG", inter => inter.pushlong(BigInt(inter.pop
 namedimplementations.set("OPENURLRAW", inter => inter.log(`CS2 OPENURLRAW: ${inter.popint()}, ${inter.popstring()}`));
 
 namedimplementations.set("ENUM_GETOUTPUTCOUNT", async inter => {
-    let json = await loadEnum(inter.calli.source, inter.popint());
+    let json = await inter.calli.source.getObject("enums", inter.popint());
     inter.pushint((json.intArrayValue1 ?? json.intArrayValue2?.values ?? json.stringArrayValue1 ?? json.stringArrayValue2?.values)?.length ?? 0);
 });
 

@@ -3,7 +3,7 @@ import { Openrs2CacheSource, openrs2GetEffectiveBuildnr, validOpenrs2Caches } fr
 import { cacheMajors } from "../constants";
 import { FileRange } from "../utils";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
-import { cacheFileDecodeModes } from "./filetypes";
+import { cacheFileDecodeModes } from "../parser/filetypes";
 import { testDecodeFile } from "./testdecode";
 
 
@@ -70,7 +70,7 @@ export async function fileHistory(output: ScriptOutput, outdir: ScriptFS, mode: 
                         ext = "hexerr.json";
                     } else {
                         try {
-                            decoded = await decoder.read(newfile, id, source);
+                            decoded = await decoder.read(newfile, id, source, undefined);
                             success = true;
                             ext = decoder.ext;
                         } catch {

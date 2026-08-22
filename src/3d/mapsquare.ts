@@ -1,6 +1,6 @@
-import { packedHSL2HSL, HSL2RGB, ModelModifications, posmod, getOrInsert } from "../utils";
+import { packedHSL2HSL, HSL2RGB, ModelModifications, posmod, getOrInsert, packMapsquare } from "../utils";
 import { cacheConfigPages, cacheMajors, cacheMapFiles, lastClassicBuildnr, lastLegacyBuildnr } from "../constants";
-import { parse } from "../opdecoder";
+import { parse } from "../parser/jsondecoders";
 import { mapsquare_underlays } from "../../generated/mapsquare_underlays";
 import { mapsquare_overlays } from "../../generated/mapsquare_overlays";
 import { mapsquare_locations } from "../../generated/mapsquare_locations";
@@ -10,7 +10,7 @@ import { mapsquare_watertiles } from "../../generated/mapsquare_watertiles";
 import { augmentThreeJsFloorMaterial, ThreejsSceneCache, ob3ModelToThree, EngineCache, applyMaterial, ParsedMaterial, augmentZOffsetMaterial } from "./modeltothree";
 import { BufferAttribute, DataTexture, Matrix4, MeshBasicMaterial, Object3D, Quaternion, RGBAFormat, Vector3 } from "three";
 import { defaultMaterial, materialCacheKey, MaterialData } from "./materials/jmat";
-import { objects } from "../../generated/objects";
+import { locs } from "../../generated/locs";
 import { parseSprite } from "./materials/sprite";
 import * as THREE from "three";
 import { legacyMajors } from "../cache/legacycache";
@@ -27,7 +27,6 @@ export const tiledimensions = 512;
 export const rs2ChunkSize = 64;
 export const classicChunkSize = 48;
 export const squareLevels = 4;//TODO get rid of this and use grid.levels instead
-export const worldStride = 128;
 const heightScale = 1 / 16;
 
 const upvector = new THREE.Vector3(0, 1, 0);
@@ -935,7 +934,7 @@ export type ParsemapOpts = { padfloor?: boolean, invisibleLayers?: boolean, coll
 
 export async function getMapsquareData(engine: EngineCache, chunkx: number, chunkz: number) {
 	let squareSize = (engine.classicData ? classicChunkSize : rs2ChunkSize);
-	let squareindex = chunkx + chunkz * worldStride;
+	let squareindex = packMapsquare(chunkx, chunkz);
 
 	let tiles: mapsquare_tiles["tiles"];
 	let nxttiles: mapsquare_tiles_nxt | null = null;
@@ -1099,10 +1098,8 @@ export async function mapsquareSkybox(scene: ThreejsSceneCache, mainchunk: Chunk
 	if (mainchunk?.extra.unk00?.unk20) {
 		fogColor = mainchunk.extra.unk00.unk20.slice(1);
 	}
-	if (mainchunk?.extra.unk80) {
-		let envarch = await scene.engine.getArchiveById(cacheMajors.config, cacheConfigPages.environments);
-		let envfile = envarch.find(q => q.fileid == mainchunk.extra!.unk80!.environment)!;
-		let env = parse.environments.read(envfile.buffer, scene.engine.rawsource);
+	if (mainchunk?.extra.skyboxdata) {
+		let env = await scene.engine.getObject("skyboxes", mainchunk.extra.skyboxdata.skybox);
 		if (typeof env.model == "number") {
 			skyboxModelid = env.model;
 			skybox = await ob3ModelToThree(scene, await scene.getModelData(env.model));
@@ -1397,9 +1394,9 @@ type MapsquareLocation = {
 	extras: ModelExtrasLocation
 }
 
-export function defaultMorphId(locmeta: objects) {
+export function defaultMorphId(locmeta: locs) {
 	let newid = -1;
-	if (locmeta.morphs_1) { newid = locmeta.morphs_1.unk2[0] ?? locmeta.morphs_1.unk3; }
+	if (locmeta.morphs_1) { newid = locmeta.morphs_1.options[0] ?? locmeta.morphs_1.default; }
 	if (locmeta.morphs_2) { newid = locmeta.morphs_2.unk2; }
 	if (newid == (1 << 15) - 1) { newid = -1; }//new caches with varuint
 	if (newid == (1 << 16) - 1) { newid = -1; }//old caches which use ushort
@@ -1413,16 +1410,15 @@ export async function resolveMorphedObject(source: EngineCache, id: number) {
 		let locdata = getClassicLoc(source, id);
 		return { rawloc: locdata, morphedloc: locdata, resolvedid };
 	} else {
-		let objectfile = await source.getGameFile("objects", id);
-		let rawloc = parse.object.read(objectfile, source);
+		let rawloc = await source.getObject("locs", id);
 		let morphedloc = rawloc;
 		if (rawloc.morphs_1 || rawloc.morphs_2) {
 			let newid = defaultMorphId(rawloc);
 			if (newid != -1) {
-				let newloc = await source.getGameFile("objects", newid);
+				let newloc = await source.getObject("locs", newid);
 				morphedloc = {
 					...rawloc,
-					...parse.object.read(newloc, source)
+					...newloc
 				};
 				resolvedid = newid;
 			}
@@ -1628,21 +1624,21 @@ export function mapsquareObjectModels(cache: CacheFileSource, inst: WorldLocatio
 			rotation.premultiply(rot);
 		}
 	}
-	let linkabove = typeof objectmeta.probably_morphCeilingOffset != "undefined";
-	let followfloor = linkabove || !!objectmeta.probably_morphFloor;
+	let linkabove = typeof objectmeta.morphCeilingOffset != "undefined";
+	let followfloor = linkabove || !!objectmeta.morphFloor;
 
 	let morph: FloorMorph = {
 		translate, rotation, scale,
 		level: inst.plane,
 		placementMode: (linkabove ? "followfloorceiling" : followfloor ? "followfloor" : "simple"),
-		scaleModelHeightOffset: objectmeta.probably_morphCeilingOffset ?? 0,
+		scaleModelHeightOffset: objectmeta.morphCeilingOffset ?? 0,
 		originx, originz
 	};
 
 	let extras: ModelExtrasLocation = {
 		modeltype: "location",
 		isclickable: false,
-		modelgroup: (minimap ? `mini_objects${inst.resolvedlocid == inst.locid && inst.location.probably_animation == undefined ? inst.visualLevel : 0}` : `objects${inst.visualLevel}`),
+		modelgroup: (minimap ? `mini_objects${inst.resolvedlocid == inst.locid && inst.location.animation == undefined ? inst.visualLevel : 0}` : `objects${inst.visualLevel}`),
 		locationid: inst.locid,
 		worldx: inst.x,
 		worldz: inst.z,
@@ -1757,7 +1753,7 @@ export type WorldLocation = {
 	plane: number,
 	locid: number,
 	resolvedlocid: number,
-	location: objects,
+	location: locs,
 	sizex: number,
 	sizez: number,
 	placement: mapsquare_locations["locations"][number]["uses"][number]["extra"],
@@ -1824,7 +1820,7 @@ export async function mapsquareObjects(engine: EngineCache, grid: TileGrid, loca
 				12, 13, 14, 15, 16, 17, 18, 19, 20, 21//roof types, only some are confirmed
 			]
 
-			if (collision && !rawloc.probably_nocollision) {
+			if (collision && !rawloc.walkable) {
 				for (let dz = 0; dz < sizez; dz++) {
 					for (let dx = 0; dx < sizex; dx++) {
 						let tile = grid.getTile(inst.x + originx + dx, inst.y + originz + dz, callingtile.effectiveLevel);
@@ -1832,29 +1828,29 @@ export async function mapsquareObjects(engine: EngineCache, grid: TileGrid, loca
 							let col = tile.effectiveCollision!;
 							//TODO check for other loc types
 							//22 should block, 4 should not
-							if (inst.type == 22 && rawloc.maybe_blocks_movement) {
+							if (inst.type == 22 && rawloc.blocks_movement) {
 								col.walk[0] = true;
 							}
 							if (inst.type == 0) {
 								col.walk[1 + inst.rotation] = true;
-								if (!rawloc.maybe_allows_lineofsight) {
+								if (!rawloc.allows_lineofsight) {
 									col.sight[1 + inst.rotation] = true;
 								}
 							} else if (inst.type == 2) {
 								col.walk[1 + inst.rotation] = true;
 								col.walk[1 + (inst.rotation + 1) % 4] = true;
-								if (!rawloc.maybe_allows_lineofsight) {
+								if (!rawloc.allows_lineofsight) {
 									col.sight[1 + inst.rotation] = true;
 									col.sight[1 + (inst.rotation + 1) % 4] = true;
 								}
 							} else if (inst.type == 1 || inst.type == 3) {
 								col.walk[5 + inst.rotation] = true;
-								if (!rawloc.maybe_allows_lineofsight) {
+								if (!rawloc.allows_lineofsight) {
 									col.sight[5 + inst.rotation] = true;
 								}
 							} else if (fullcollisiontypes.includes(inst.type)) {
 								col.walk[0] = true;
-								if (!rawloc.maybe_allows_lineofsight) {
+								if (!rawloc.allows_lineofsight) {
 									col.sight[0] = true;
 								}
 							}

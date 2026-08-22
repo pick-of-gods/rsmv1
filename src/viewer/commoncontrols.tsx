@@ -2,9 +2,11 @@ import * as React from "react";
 import { boundMethod } from "autobind-decorator";
 import prettyJson from "json-stringify-pretty-compact";
 import classNames from "classnames";
-import { EngineCache } from "3d/modeltothree";
-import { cacheFileJsonModes } from "scripts/filetypes";
-import { JsonSearch, JsonSearchFilter, useJsonCacheSearch } from "./jsonsearch";
+import { EngineCache } from "../3d/modeltothree";
+import { jsonCacheSearch, JsonSearchFilter } from "./jsonsearch";
+import { cacheFileJsonModes } from "../parser/jsondecoders";
+import { drawTexture } from "../imgutils";
+import { BlobTS, TypedEmitter } from "../utils";
 
 
 export function CanvasView(p: { canvas: HTMLCanvasElement | null, fillHeight?: boolean }) {
@@ -23,11 +25,26 @@ export function CanvasView(p: { canvas: HTMLCanvasElement | null, fillHeight?: b
 	)
 }
 
+export function TextureView(p: { img: HTMLImageElement | HTMLCanvasElement | HTMLVideoElement | ImageBitmap | ImageData, fillHeight?: boolean }) {
+	let ref = React.useCallback((cnv: HTMLCanvasElement | null) => {
+		if (cnv) {
+			let ctx = cnv.getContext("2d")!;
+			drawTexture(ctx, p.img);
+		}
+	}, [p.img]);
+
+	return (
+		<div className="mv-image-preview" style={p.fillHeight ? { height: "100%" } : {}}>
+			<canvas ref={ref} className="mv-image-preview-canvas" />
+		</div>
+	);
+}
+
 export function BlobImage(p: { file: Uint8Array, ext: string, fillHeight?: boolean }) {
 	let urlref = React.useRef("");
 	let ref = React.useCallback((el: HTMLImageElement | null) => {
 		if (el) {
-			let blob = new Blob([p.file], { type: `image/${p.ext == "svg" ? "svg+xml" : p.ext}` });
+			let blob = new BlobTS([p.file], { type: `image/${p.ext == "svg" ? "svg+xml" : p.ext}` });
 			let url = URL.createObjectURL(blob);
 			urlref.current = url;
 			el.src = url;
@@ -49,7 +66,7 @@ export function BlobAudio(p: { file: Uint8Array, autoplay: boolean }) {
 
 	let ref = React.useCallback((el: HTMLAudioElement | null) => {
 		if (el) {
-			let blob = new Blob([p.file], { type: `audio/ogg` });
+			let blob = new BlobTS([p.file], { type: `audio/ogg` });
 			let url = URL.createObjectURL(blob);
 			urlref.current = url;
 			el.src = url;
@@ -65,12 +82,12 @@ export function BlobAudio(p: { file: Uint8Array, autoplay: boolean }) {
 	)
 }
 
-export function TabStrip<T extends string>(p: { value: T, tabs: Partial<Record<T, string>>, onChange: (v: T) => void }) {
-	const templatecols = `repeat(${Math.min(4, Object.keys(p.tabs).length)},minmax(0,1fr))`;
+export function TabStrip<T extends string>(p: { value: T | null, tabs: Partial<Record<T, string>>, onChange: (v: T) => void, compact?: boolean, columns?: number }) {
+	const templatecols = `repeat(${p.columns ?? Math.min(4, Object.keys(p.tabs).length)},minmax(0,1fr))`;
 	return (
 		<div className="mv-tab-strip mv-inset" style={{ gridTemplateColumns: templatecols }}>
 			{Object.entries(p.tabs).map(([k, v]) => (
-				<div key={k} className={classNames("mv-icon-button", { active: p.value == k as any })} onClick={() => p.onChange(k as any)}>{v as string}</div>
+				<div key={k} className={classNames("mv-icon-button", { active: p.value == k, "mv-icon-button__compact": p.compact })} onClick={() => p.onChange(k as any)}>{v as string}</div>
 			))}
 		</div>
 	)
@@ -78,6 +95,10 @@ export function TabStrip<T extends string>(p: { value: T, tabs: Partial<Record<T
 
 export function JsonDisplay(p: { obj: any }) {
 	return (<pre className="mv-json-block">{prettyJson(p.obj, { maxLength: 32 })}</pre>);
+}
+
+export function RawTextDisplay(p: { text: string | undefined | null }) {
+	return (<pre className="mv-json-block">{p.text ?? ""}</pre>);
 }
 
 export function IdInput({ initialid, onChange }: { initialid?: number, onChange: (id: number) => void }) {
@@ -98,12 +119,25 @@ export function IdInput({ initialid, onChange }: { initialid?: number, onChange:
 		</form>
 	)
 }
-export function IdInputSearch(p: { cache: EngineCache, mode: keyof typeof cacheFileJsonModes, initialid?: number, onChange: (id: number) => void }) {
+export function IdInputSearch(p: { cache: EngineCache | undefined, mode: keyof typeof cacheFileJsonModes, initialid?: number, onChange: (id: number) => void }) {
 	let [search, setSearch] = React.useState("" + (p.initialid ?? ""));
 	let [id, setidstate] = React.useState(p.initialid ?? 0);
 	let [searchopen, setSearchopen] = React.useState(false);
-	const filters: JsonSearchFilter[] = [{ path: ["name"], search: search }];
-	let { loaded, filtered, getprop } = useJsonCacheSearch(p.cache, p.mode, filters, !searchopen);
+	const friendlynamefilter: JsonSearchFilter[] = [{ path: ["name"], search: search }];
+	const internalnamefilter: JsonSearchFilter[] = [{ path: ["$filename"], search: search }];
+	let decoder = cacheFileJsonModes[p.mode];
+	let hasinternalnames = typeof decoder.lookup.internalNamefile == "number";
+	let jsonsearch = useAwaited(() => p.cache && jsonCacheSearch(p.cache, p.mode), [p.cache, p.mode]);
+	let internalnames = useAwaited(() => (typeof decoder.lookup.internalNamefile == "number" ? p.cache?.getInternalNameList(decoder.lookup.internalNamefile) : undefined), [p.cache, decoder]);
+	let friendlyname = jsonsearch?.run(friendlynamefilter);
+	let internalname: { id: number, name: string }[] = [];
+	for (let [id, name] of internalnames ?? []) {
+		if (name.toLowerCase().includes(search.toLowerCase())) {
+			internalname.push({ id, name });
+		}
+	}
+	let anyloaded = !!jsonsearch || !!internalnames;
+	let bothloaded = !!jsonsearch && !!internalnames;
 
 	const submitid = (v: number) => {
 		setidstate(v);
@@ -130,13 +164,17 @@ export function IdInputSearch(p: { cache: EngineCache, mode: keyof typeof cacheF
 				<input type="text" className="mv-searchbar-input" spellCheck="false" value={search} onChange={e => setSearchText(e.currentTarget.value)} />
 				<input type="submit" style={{ width: "25px", height: "25px" }} value="" className="sub-btn sub-btn-search" />
 			</form>
-			{searchopen && !loaded && (
+			{searchopen && !bothloaded && (
 				<div>Loading...</div>
 			)}
-			{searchopen && loaded && (
+			{searchopen && anyloaded && (
 				<div className="mv-sidebar-scroll">
-					{filtered.slice(0, 100).map((q, i) => (
-						<div key={q.$fileid} onClick={e => submitid(q.$fileid)}>{q.$fileid} - {getprop(q, ["name"], 0).next().value}</div>
+					{friendlyname?.slice(0, 100).map((q, i) => (
+						<div key={q.$fileid} onClick={e => submitid(q.$fileid)}>{q.$fileid} - {q.name}</div>
+					))}
+					<hr />
+					{internalname.slice(0, 100).map((q, i) => (
+						<div key={q.id} onClick={e => submitid(q.id)}>{q.id} - {q.name}</div>
 					))}
 				</div>
 			)}
@@ -150,7 +188,11 @@ export function StringInput({ initialid, onChange }: { initialid?: string, onCha
 
 	let id = (stale.current || typeof initialid == "undefined" ? idstate : initialid);
 
-	let submit = (e: React.FormEvent) => { onChange(id); e.preventDefault(); stale.current = false; };
+	let submit = (e: React.FormEvent) => {
+		onChange(id);
+		e.preventDefault();
+		stale.current = false;
+	};
 	return (
 		<form className="mv-searchbar" onSubmit={submit}>
 			<input type="text" className="mv-searchbar-input" spellCheck="false" value={id} onChange={e => { setId(e.currentTarget.value); stale.current = true; }} />
@@ -239,4 +281,95 @@ export class InputCommitted extends React.Component<React.DetailedHTMLProps<Reac
 		let newp = { ...this.props, onChange: undefined, value: undefined, defaultValue: this.props.value };
 		return <input ref={this.ref} {...newp} />;
 	}
+}
+
+export function DomWrap(p: { el: HTMLElement | DocumentFragment | null | undefined, tagName?: "div" | "td" | "span" | "p", style?: React.CSSProperties, className?: string }) {
+	let ref = (el: HTMLElement | null) => {
+		p.el && el && el.replaceChildren(p.el);
+	}
+	let Tagname = p.tagName ?? "div";
+	return <Tagname ref={ref} style={p.style} className={p.className} />;
+}
+
+export function useAwaited<T>(fn: (abort: AbortSignal) => Promise<T> | T | null | undefined, deps: any[] = [], staletime = 0): T | null | undefined {
+	let forceupdate = useForceUpdate();
+	// needed to reset the value when deps change, otherwise it will keep the old value until the new promise resolves
+	let value = React.useRef<T | null | undefined>(null);
+	let generation = React.useRef<AbortController | null>(null);
+	let showngeneration = React.useRef<AbortController | null>(null);
+	let prom = React.useMemo(() => {
+		generation.current?.abort();
+		generation.current = new AbortController();
+		let prom = fn(generation.current.signal);
+		if (!(prom instanceof Promise)) {
+			value.current = prom;
+			showngeneration.current = generation.current;
+		} else if (staletime <= 0) {
+			value.current = null;
+		}
+		return prom;
+	}, deps);
+	React.useEffect(() => {
+		if (!prom || !(prom instanceof Promise)) { return; }
+		let gen = generation.current!;
+		// leave stale data in place for max 200ms to prevent flicker
+		let timeout = (staletime <= 0 ? 0 : +setTimeout(() => {
+			if (gen == generation.current && gen != showngeneration.current) {
+				showngeneration.current = gen;
+				value.current = null;
+				forceupdate();
+			}
+		}, staletime));
+		prom.then(res => {
+			clearTimeout(timeout);
+			if (gen == generation.current) {
+				value.current = res;
+				showngeneration.current = gen;
+				forceupdate();
+			}
+		}).catch(err => console.error(err));
+		return () => {
+			gen!.abort();
+			clearTimeout(timeout);
+		}
+	}, [prom]);
+	return value.current;
+}
+
+function forceUpdateReducer(i: number) { return i + 1; }
+export function useForceUpdate() {
+	const [, forceUpdate] = React.useReducer(forceUpdateReducer, 0);
+	return forceUpdate;
+}
+
+export function useEmitterProperty<T extends TypedEmitter<any>, R>(emitter: T, prop: T extends TypedEmitter<infer Q> ? keyof Q : never, selector: (obj: T) => R): R {
+	const [value, setValue] = React.useState(selector(emitter));
+	React.useEffect(() => {
+		let handler = () => setValue(selector(emitter));
+		emitter.on(prop, handler);
+		return () => emitter.off(prop, handler);
+	}, [emitter, prop, selector]);
+	return value;
+}
+
+export function useForceUpdateDebounce(delay = 50) {
+	const forceUpdate = useForceUpdate();
+	let ref = React.useRef(() => { });
+	React.useMemo(() => {
+		let timer = 0;
+		let tick = () => {
+			timer = 0;
+			forceUpdate();
+		}
+		ref.current = () => {
+			if (!timer) {
+				timer = +setTimeout(tick, delay);
+			}
+		}
+		return () => {
+			clearTimeout(timer);
+			timer = 0;
+		}
+	}, [forceUpdate, ref]);
+	return ref.current;
 }

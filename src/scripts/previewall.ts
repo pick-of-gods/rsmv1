@@ -1,7 +1,7 @@
 import { CacheFileSource } from "../cache";
 import { cacheMajors } from "../constants";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
-import { cacheFileDecodeModes } from "./filetypes";
+import { cacheFileDecodeModes } from "../parser/filetypes";
 
 export async function previewAllFileTypes(output: ScriptOutput, fs: ScriptFS, source: CacheFileSource, filespermode = 10) {
     let majors = await source.getCacheIndex(cacheMajors.index);
@@ -52,7 +52,8 @@ export async function previewAllFileTypes(output: ScriptOutput, fs: ScriptFS, so
                 try {
                     let logicalid = decoder.fileToLogical(source, entry.major, entry.minor, fileid);
                     resname = `${modename}_${logicalid.join(".")}.${decoder.ext}`;
-                    var res = await decoder.read(buffer, logicalid, source);
+                    let decodectx = await decoder.prepareDump(fs, source);
+                    var res = await decoder.read(buffer, logicalid, source, decodectx);
                     if (typeof res != "string" && !Buffer.isBuffer(res)) {
                         throw new Error("decoder didn't return a valid file");
                     }

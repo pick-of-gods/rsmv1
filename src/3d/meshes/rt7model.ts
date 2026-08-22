@@ -1,7 +1,7 @@
 import { packedHSL2HSL, HSL2RGB, ushortToHalf } from "../../utils";
 import * as THREE from "three";
 import { CacheFileSource } from "../../cache";
-import { parse } from "../../opdecoder";
+import { parse } from "../../parser/jsondecoders";
 import { ModelData, ModelMeshData } from "../modeldata";
 
 export type BoneCenter = {
@@ -186,7 +186,7 @@ export function parseOb3Model(modelfile: Buffer, source: CacheFileSource) {
 				vertexstart: 0,
 				vertexend: attributes.pos.count,
 				indexLODs: indexlods,
-				materialId: mesh.materialArgument - 1,
+				materialId: mesh.material,
 				hasVertexAlpha: !!mesh.alphaBuffer,
 				needsNormalBlending: false,
 				attributes: attributes
@@ -264,7 +264,7 @@ export function parseOb3Model(modelfile: Buffer, source: CacheFileSource) {
 				vertexstart: minindex,
 				vertexend: maxindex + 1,
 				indexLODs: [index],
-				materialId: render.materialArgument - 1,
+				materialId: render.material,
 				hasVertexAlpha: !!render.hasVertexAlpha,
 				needsNormalBlending: false,
 				attributes: attributes

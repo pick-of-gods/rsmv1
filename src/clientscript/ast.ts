@@ -1,10 +1,11 @@
 import { clientscript } from "../../generated/clientscript";
 import { clientscriptdata } from "../../generated/clientscriptdata";
-import { ClientscriptObfuscation, OpcodeInfo, getArgType, getReturnType } from "./callibrator";
-import { debugAst } from "./codewriter";
-import { branchInstructions, branchInstructionsOrJump, dynamicOps, typeToPrimitive, namedClientScriptOps, variableSources, StackDiff, StackInOut, StackList, StackTypeExt, ClientScriptOp, StackConst, StackType, StackConstants, getParamOps, subtypes, branchInstructionsInt, branchInstructionsLong, ExactStack, dependencyGroup, dependencyIndex, typeuuids, getOpName, makeop } from "./definitions";
+import { ClientscriptObfuscation, OpcodeInfo, getArgType, getReturnType } from "./callibration/callibrator";
+import { debugAst } from "./typescript/codewriter";
+import { branchInstructions, branchInstructionsOrJump, dynamicOps, typeToPrimitive, namedClientScriptOps, variableSources, StackDiff, StackInOut, StackList, StackTypeExt, ClientScriptOp, StackConst, StackType, StackConstants, getParamOps, branchInstructionsInt, branchInstructionsLong, ExactStack, makeop, popDiscardOps, getOpName, subtypeuuids } from "./definitions";
 import { OpcodeWriterContext, intrinsics } from "./jsonwriter";
-import { ClientScriptSubtypeSolver } from "./subtypedetector";
+import { ClientScriptSubtypeSolver } from "./callibration/subtypedetector";
+import { vartypes } from "../constants";
 
 /**
  * known issues
@@ -70,6 +71,10 @@ export abstract class AstNode {
         this.children.splice(index, 1);
         node.parent = null;
     }
+    abstract debugName(): string;
+    debugTraverse() {
+        return this.children;
+    }
 }
 
 export class SubcallNode extends AstNode {
@@ -85,6 +90,9 @@ export class SubcallNode extends AstNode {
         let body = this.children.slice(0, -1).flatMap(q => q.getOpcodes(ctx));
         body.push(...ctx.makeSubCallOps(this.funcname));
         return body;
+    }
+    debugName() {
+        return `subcall_${this.funcname}`;
     }
 }
 
@@ -102,6 +110,12 @@ export class ComposedOp extends AstNode {
         return this.children.flatMap(q => q.getOpcodes(ctx))
             .concat(this.internalOps.flatMap(q => q.getOpcodes(ctx)));
     }
+    debugName() {
+        return `composed<${this.type}>`;
+    }
+    debugTraverse() {
+        return [...this.children, ...this.internalOps];
+    }
 }
 
 export class VarAssignNode extends AstNode {
@@ -114,6 +128,12 @@ export class VarAssignNode extends AstNode {
     addVar(node: RawOpcodeNode) {
         this.varops.unshift(node);
         this.knownStackDiff.in.push(getNodeStackIn(node));
+    }
+    debugName() {
+        return `varassign`;
+    }
+    debugTraverse() {
+        return [...this.children, ...this.varops.slice().reverse()];
     }
 }
 
@@ -206,6 +226,9 @@ export class CodeBlockNode extends AstNode {
     dump() {
         debugAst(this);
     }
+    debugName() {
+        return `codeblock_${this.scriptid}_${this.subfuncid}`;
+    }
 }
 
 function retargetJumps(ctx: OpcodeWriterContext, code: ClientScriptOp[], from: number, to: number) {
@@ -260,6 +283,10 @@ export class BranchingStatement extends AstNode {
         let op: ClientScriptOp = { opcode: this.op.opcode, imm: 1, imm_obj: null };
         return this.children.flatMap(q => q.getOpcodes(ctx)).concat(op);
     }
+
+    debugName() {
+        return `branch_${this.op.opcode}`;
+    }
 }
 
 export class WhileLoopStatementNode extends AstNode {
@@ -286,6 +313,9 @@ export class WhileLoopStatementNode extends AstNode {
         body.push({ opcode: jump.id, imm: -(body.length + 1 + cond.length), imm_obj: null });
         return [...cond, ...body];
     }
+    debugName() {
+        return `whileloop`;
+    }
 }
 
 type ControlStatementType = "break" | "continue";
@@ -298,7 +328,9 @@ export class ControlStatementNode extends AstNode {
     getOpcodes(ctx: OpcodeWriterContext): never {
         throw new Error("break/continue statements failed to process. only break at end of switch case supported");
     }
-
+    debugName() {
+        return `control_${this.type}`;
+    }
 }
 
 export class SwitchStatementNode extends AstNode {
@@ -349,7 +381,10 @@ export class SwitchStatementNode extends AstNode {
         if (defaultblock) {
             defaultblock.maxEndIndex = endindex;
         }
-        return new SwitchStatementNode(switchop.originalindex, valueop, defaultblock, branches);
+        let res = new SwitchStatementNode(switchop.originalindex, valueop, defaultblock, branches);
+        // copy exact type uuid from the type we were assigned earlier in the parser
+        res.knownStackDiff.exactin = switchop.knownStackDiff?.exactin ?? null;
+        return res;
     }
     getOpcodes(ctx: OpcodeWriterContext) {
         let body: ClientScriptOp[] = [];
@@ -408,6 +443,16 @@ export class SwitchStatementNode extends AstNode {
 
         return body;
     }
+    debugName() {
+        return `switch`;
+    }
+    debugTraverse() {
+        return [
+            ...(this.valueop ? [this.valueop] : []),
+            ...this.branches.map(q => q.block),
+            ...(this.defaultbranch ? [this.defaultbranch] : [])
+        ];
+    }
 }
 
 export class IfStatementNode extends AstNode {
@@ -460,6 +505,12 @@ export class IfStatementNode extends AstNode {
         if (truebranch.length == 1) { retargetJumps(ctx, cond, 2, 1); }
         return [...cond, ...truebranch, ...falsebranch];
     }
+    debugName() {
+        return `if`;
+    }
+    debugTraverse() {
+        return [this.statement, this.truebranch, ...(this.falsebranch ? [this.falsebranch] : [])];
+    }
 }
 
 export class FunctionBindNode extends AstNode {
@@ -482,6 +533,9 @@ export class FunctionBindNode extends AstNode {
         ops.push({ opcode: namedClientScriptOps.pushconst, imm: 2, imm_obj: typestring });
         return ops;
     }
+    debugName() {
+        return `functionbind`;
+    }
 }
 
 export class RawOpcodeNode extends AstNode {
@@ -497,6 +551,9 @@ export class RawOpcodeNode extends AstNode {
         let body = this.children.flatMap(q => q.getOpcodes(ctx));
         body.push({ ...this.op });
         return body;
+    }
+    debugName() {
+        return getOpName(this.opinfo.id);
     }
 }
 
@@ -684,7 +741,7 @@ export function translateAst(ast: CodeBlockNode) {
                     ast.remove(postpushx);
                     op.internalOps.push(postpushx);
                 }
-                op.knownStackDiff = StackInOut.fromExact([], [subtypes.int]);
+                op.knownStackDiff = StackInOut.fromExact([], [vartypes.int]);
             }
         }
     }
@@ -967,6 +1024,9 @@ export class ClientScriptFunction extends AstNode {
         }
         return body;
     }
+    debugName() {
+        return `function_${this.scriptname}`;
+    }
 }
 
 export function varArgtype(stringconst: string | unknown, lastintconst: number | unknown) {
@@ -993,11 +1053,11 @@ export function varArgtype(stringconst: string | unknown, lastintconst: number |
 export function setRawOpcodeStackDiff(consts: StackConstants | null, calli: ClientscriptObfuscation, node: RawOpcodeNode) {
     if (branchInstructionsInt.includes(node.opinfo.id)) {
         //make sure that left and right side are same type
-        let uuid = typeuuids.int++;
+        let uuid = subtypeuuids.int++;
         node.knownStackDiff = StackInOut.fromExact([uuid, uuid], []);
     } else if (branchInstructionsLong.includes(node.opinfo.id)) {
         //make sure that left and right side are same type
-        let uuid = typeuuids.long++;
+        let uuid = subtypeuuids.long++;
         node.knownStackDiff = StackInOut.fromExact([uuid, uuid], []);
     } else if (node.opinfo.id == namedClientScriptOps.dbrow_getfield) {
         //args are rowid,tablefield,subrow
@@ -1007,10 +1067,10 @@ export function setRawOpcodeStackDiff(consts: StackConstants | null, calli: Clie
             let columnid = (tablefield >> 4) & 0xff;
             let subfield = tablefield & 0xf;
             let table = calli.dbtables.get(dbtable);
-            let column = table?.unk01?.columndata.find(q => q.id == columnid) ?? table?.unk02?.columndata.find(q => q.id == columnid);
+            let column = table?.columndata?.find(q => q.id == columnid);
             if (column) {
                 node.knownStackDiff = StackInOut.fromExact(
-                    [subtypes.dbrow, subtypes.int, subtypes.int],
+                    [vartypes.dbrow, vartypes.int, vartypes.int],
                     (subfield != 0 ? [column.columns[subfield - 1].type] : column.columns.map(q => q.type))
                 )
             }
@@ -1039,7 +1099,7 @@ export function setRawOpcodeStackDiff(consts: StackConstants | null, calli: Clie
         let intypeid = consts?.values.at(-4);
         if (typeof outtypeid == "number" && typeof intypeid == "number") {
             node.knownStackDiff = StackInOut.fromExact(
-                [subtypes.int, subtypes.int, subtypes.enum, intypeid],
+                [vartypes.int, vartypes.int, vartypes.enum, intypeid],
                 [outtypeid],
             )
         }
@@ -1074,14 +1134,14 @@ export function setRawOpcodeStackDiff(consts: StackConstants | null, calli: Clie
     } else if (node.opinfo.id == namedClientScriptOps.pushconst) {
         if (node.op.imm == 0) {
             if (typeof node.op.imm_obj != "number") { throw new Error("unexpected"); }
-            node.knownStackDiff = StackInOut.fromExact([], [typeuuids.int++]);
+            node.knownStackDiff = StackInOut.fromExact([], [subtypeuuids.int++]);
             node.knownStackDiff.constout = node.op.imm_obj;
         } else if (node.op.imm == 1) {
-            node.knownStackDiff = StackInOut.fromExact([], [typeuuids.long++]);
+            node.knownStackDiff = StackInOut.fromExact([], [subtypeuuids.long++]);
             node.knownStackDiff.constout = node.op.imm_obj;
         } else if (node.op.imm == 2) {
             let stringconst = node.op.imm_obj as string;
-            node.knownStackDiff = StackInOut.fromExact([], [typeuuids.string++]);
+            node.knownStackDiff = StackInOut.fromExact([], [subtypeuuids.string++]);
             node.knownStackDiff.constout = node.op.imm_obj;
 
             //a string like this indicates a vararg set where this string indicates the types
@@ -1101,6 +1161,17 @@ export function setRawOpcodeStackDiff(consts: StackConstants | null, calli: Clie
         } else {
             throw new Error("unexpected");
         }
+    } else if (node.opinfo.id == namedClientScriptOps.popdiscardint) {
+        // need to hardcode this since we need special behavoir later to deal with unordered popdiscards
+        node.knownStackDiff = new StackInOut(new StackList(["int"]));
+    } else if (node.opinfo.id == namedClientScriptOps.popdiscardlong) {
+        // need to hardcode this since we need special behavoir later to deal with unordered popdiscards
+        node.knownStackDiff = new StackInOut(new StackList(["long"]));
+    } else if (node.opinfo.id == namedClientScriptOps.popdiscardstring) {
+        // need to hardcode this since we need special behavoir later to deal with unordered popdiscards
+        node.knownStackDiff = new StackInOut(new StackList(["string"]));
+    } else if (node.opinfo.id == namedClientScriptOps.switch) {
+        node.knownStackDiff = StackInOut.fromExact([subtypeuuids.int++], []);
     }
 
     if (!node.knownStackDiff && dynamicOps.includes(node.op.opcode)) {
@@ -1136,6 +1207,25 @@ function addKnownStackDiff(children: AstNode[], calli: ClientscriptObfuscation) 
             }
         }
     }
+
+    // need special case for sequences of popdiscard ops, the jagex compiler mixes stacks
+    // merge the consecutive pops and attribute them to the last popdiscard as an unordered StackDiff
+    let lastpopdiscard: RawOpcodeNode | null = null;
+    for (let node of children) {
+        if (node instanceof RawOpcodeNode && popDiscardOps.includes(node.opinfo.id)) {
+            if (lastpopdiscard) {
+                let merged = new StackDiff();
+                merged.add(lastpopdiscard.knownStackDiff!.in.toStackDiff());
+                merged.add(node.knownStackDiff!.in.toStackDiff());
+                lastpopdiscard.knownStackDiff = new StackInOut();
+                node.knownStackDiff = new StackInOut(new StackList([merged]));
+            }
+            lastpopdiscard = node;
+        } else {
+            lastpopdiscard = null;
+        }
+    }
+
     return hasunknown;
 }
 
@@ -1358,7 +1448,7 @@ function reattachDeadcode(sections: CodeBlockNode[]) {
     }
 }
 
-export function parseClientScriptIm(calli: ClientscriptObfuscation, script: clientscript, fileid = -1) {
+export function parseClientScriptIm(calli: ClientscriptObfuscation, script: clientscript, fileid: number) {
     let { sections, rootfunc } = generateAst(calli, script, script.opcodedata, fileid);
     // reattachDeadcode(sections);
     let typectx = new ClientScriptSubtypeSolver();

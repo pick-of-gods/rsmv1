@@ -12,6 +12,8 @@ export type npcs = {
 	unk_0D?: number | null
 	unk_0E?: number | null
 	unk_11?: number[] | null
+	unk_1A?: number | null
+	unk_1B?: number | null
 	actions_0?: string | null
 	actions_1?: string | null
 	actions_2?: string | null
@@ -39,9 +41,11 @@ export type npcs = {
 	head_icon_data?: number | null
 	unknown_67?: number | null
 	morphs_1?: {
-		unk1: number,
-		unk2: number[],
-		unk3: (number|number),
+		varbit: number,
+		varp: number,
+		options: number[],
+		default: number,
+		unk5: (number|null),
 	} | null
 	unknown_6B?: false | null
 	slowWalk?: false | null
@@ -59,10 +63,12 @@ export type npcs = {
 		number,
 	] | null
 	morphs_2?: {
-		unk1: number,
+		varbit: number,
+		varp: number,
 		unk2: number,
-		unk3: number[],
-		unk4: number,
+		options: number[],
+		default: number,
+		unk5: number,
 	} | null
 	movementCapabilities?: number | null
 	unknown_78?: [
@@ -149,13 +155,12 @@ export type npcs = {
 		unk0: number,
 		varbit: number,
 		varp: number,
-		flags: number,
 		multimodel: {
 			value: number,
 			models: {
 				unk1: number,
 				unk2: number,
-				unk3: number,
+				model: number,
 				extracount: number,
 				extra1: number | null,
 				extra2: number | null,
@@ -167,12 +172,12 @@ export type npcs = {
 			models: {
 				unk1: number,
 				unk2: number,
-				unk3: number,
+				model: number,
 			}[],
 		}[] | null,
 		multiretex: {
 			value: number,
-			models: {
+			entries: {
 				unk1: number,
 				unk2: number,
 				unk3: number,
@@ -181,7 +186,7 @@ export type npcs = {
 		}[] | null,
 		multirecol: {
 			value: number,
-			models: {
+			entries: {
 				unk1: number,
 				unk2: number,
 				unk3: number,
@@ -190,7 +195,7 @@ export type npcs = {
 		}[] | null,
 		multiretint: {
 			value: number,
-			models: {
+			entries: {
 				unk1: number,
 				unk2: number,
 				unk3: number,

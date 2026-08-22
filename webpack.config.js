@@ -20,10 +20,25 @@ module.exports = {
 		rules: [
 			{
 				test: /\.tsx?$/,
-				loader: 'ts-loader',
-				exclude: /node_modules/,
-				options: {
-					onlyCompileBundledFiles: true
+				use: {
+					loader: 'swc-loader',
+					options: {
+						env: {
+							targets: "last 5 chrome versions",
+						},
+						jsc: {
+							parser: {
+								syntax: 'typescript',
+								tsx: true,
+								decorators: true
+							},
+							transform: {
+								react: {
+									runtime: 'automatic'
+								}
+							}
+						}
+					}
 				}
 			},
 			{

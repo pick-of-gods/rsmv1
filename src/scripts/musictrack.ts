@@ -1,5 +1,5 @@
 import { CacheFileSource } from "../cache";
-import { parse } from "../opdecoder";
+import { parse } from "../parser/jsondecoders";
 
 export async function parseMusic(source: CacheFileSource, major: number, id: number, firstchunk: Buffer | null, allowdownload = false) {
 
@@ -14,17 +14,6 @@ export async function parseMusic(source: CacheFileSource, major: number, id: num
 
     let index = parse.audio.read(indexfile, source);
 
-    // let chunkdatas = await Promise.all(index.chunks.map(q => q.data ?? source.getFileById(major, q.fileid)));
-    //dont do parallel download, server will disconnect
-    // let chunkdatas: Buffer[] = [];
-    // const concurrency = 4;
-    // for (let i = 0; i < index.chunks.length; i += concurrency) {
-    //     chunkdatas.push(...await Promise.all(index.chunks.slice(i, i + concurrency).map(q => q.data ?? source.getFileById(major, q.fileid))));
-    // }
-    // }
-    // for (let q of index.chunks) {
-    //     chunkdatas.push(q.data ?? await source.getFileById(major, q.fileid));
-    // }
     let chunkdatas = (allowdownload
         ? await asyncMap(index.chunks, q => q.data ?? source.getFileById(major, q.fileid), 8)
         : index.chunks.filter(q => q.data).map(q => q.data!)
@@ -53,8 +42,8 @@ export async function parseMusic(source: CacheFileSource, major: number, id: num
             }
 
             //do the prototype thing here since Buffer doesn't copy, buf UInt8Array does
-            let newheader: Buffer = Uint8Array.prototype.slice.call(chunk, headerindex, scan);
-            let datachunk = chunk.slice(scan, scan + datalen);
+            let newheader = Buffer.from(chunk.subarray(headerindex, scan));
+            let datachunk = Buffer.from(chunk.subarray(scan, scan + datalen));
             scan += datalen;
             let isfirst = headerindex == 0 && chunkindex == 0;
             let islast = chunkindex == chunkdatas.length - 1 && scan == chunk.length;

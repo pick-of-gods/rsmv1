@@ -34,12 +34,33 @@ export type Stream = {
 	tee(): Stream
 }
 
-export function checkObject<T extends { [key: string]: "string" | "number" | "boolean" }>(obj: unknown, props: T) {
+// fix typings conflict between nodejs Buffer typings and browser arraybuffer typings
+export const BlobTS = Blob as unknown as {
+	new(data: (BlobPart | Uint8Array<ArrayBufferLike>)[], options?: BlobPropertyBag): Blob,
+	prototype: Blob
+};
+
+export function checkObject<T extends { [key: string]: "string" | "number" | "boolean" | "numberarray" }>(obj: unknown, props: T) {
 	if (!obj || typeof obj != "object") { return null; }
-	let res: { [key in keyof T]: T[key] extends "string" ? string : T[key] extends "number" ? T[key] extends "boolean" ? boolean : number : never } = {} as any;
+	let res: {
+		[key in keyof T]:
+		T[key] extends "string" ? string :
+		T[key] extends "number" ? number :
+		T[key] extends "boolean" ? boolean :
+		T[key] extends "numberarray" ? number[] :
+		never
+	} = {} as any;
 	for (let [key, type] of Object.entries(props)) {
-		if (!(key in obj) && typeof obj[key] != type) { return null; }
-		res[key as keyof T] = obj[key];
+		if (!(key in obj)) { return null; }
+		let prop = obj[key];
+		if (type == "numberarray") {
+			if (!Array.isArray(prop)) { return null; }
+			if (prop.some(v => typeof v != "number")) { return null; }
+			res[key as keyof T] = prop.slice() as any;
+		} else {
+			if (typeof prop != type) { return null; }
+			res[key as keyof T] = prop;
+		}
 	}
 	return res;
 }
@@ -58,7 +79,6 @@ export function cacheFilenameHash(name: string, oldhash: boolean) {
 	}
 	return hash >>> 0;//cast to u32
 }
-globalThis.cacheFilenameHash = cacheFilenameHash;
 
 export function stringToMapArea(str: string) {
 	let [x, z, xsize, zsize] = str.split(/[,\.\/:;]/).map(n => +n);
@@ -93,7 +113,7 @@ export function getOrInsert<K, V>(map: Map<K, V>, key: K, fallback: () => (V ext
 }
 
 export function delay(ms: number) {
-	return new Promise(d => setTimeout(d, ms))
+	return new Promise<void>(d => { setTimeout(d, ms) });
 }
 
 export function posmod(x: number, n: number) {
@@ -405,9 +425,6 @@ export function RGB2HSL(r: number, g: number, b: number): [number, number, numbe
 	return [h, s, l];
 }
 
-globalThis.hsl = (v: number) => HSL2RGB(packedHSL2HSL(v));
-
-
 export function HSL2packHSL(h: number, s: number, l: number) {
 	if (h < 0) { h += 1; }
 	return (Math.round(h * 63) << 10) | (Math.round(s * 7) << 7) | (Math.round(l * 127));
@@ -420,6 +437,65 @@ export function packedHSL2HSL(hsl: number) {
 	if (h > 0.5)
 		h = h - 1.0;
 	return [h, s, l];
+}
+
+export function hsl2hex(hsl: number) {
+	let rgb = HSL2RGB(packedHSL2HSL(hsl));
+	return `#${((rgb[0] << 16) | (rgb[1] << 8) | (rgb[2] << 0)).toString(16).padStart(6, "0")}`;
+}
+
+export function hex2hsl(hex: string) {
+	let n = parseInt(hex.replace(/^#/, ""), 16);
+	return HSL2packHSL(...RGB2HSL((n >> 16) & 0xff, (n >> 8) & 0xff, (n >> 0) & 0xff));
+}
+
+export type Coord = {
+	x: number,
+	z: number,
+	level: number
+};
+
+export function unpackCoordgrid(coord: number) {
+	let level = (coord >> 28) & 0x3;
+	let x = (coord >> 14) & 0x3FFF;
+	let z = coord & 0x3FFF;
+	return { level, x, z };
+}
+
+export function packCoordgrid(level: number, x: number, z: number) {
+	return ((level & 0x3) << 28) | ((x & 0x3FFF) << 14) | (z & 0x3FFF);
+}
+
+export function unpackComponent(comp: number) {
+	let intf = (comp >>> 16) & 0xFFFF;
+	let sub = comp & 0xFFFF;
+	return { intf, sub };
+}
+
+export function packComponent(intf: number, sub: number) {
+	return (intf << 16) | sub;
+}
+
+export function unpackAnimFrame(comp: number) {
+	let intf = (comp >>> 16) & 0xFFFF;
+	let sub = comp & 0xFFFF;
+	return { intf, sub };
+}
+
+export function packAnimFrame(intf: number, sub: number) {
+	return (intf << 16) | sub;
+}
+
+export function packMapsquare(x: number, z: number) {
+	const worldStride = 128;
+	return (z * worldStride) + x;
+}
+
+export function unpackMapsquare(mapsquare: number) {
+	const worldStride = 128;
+	let x = mapsquare % worldStride;
+	let z = Math.floor(mapsquare / worldStride);
+	return { x, z };
 }
 
 export class TypedEmitter<T extends Record<string, any>> {
@@ -511,6 +587,18 @@ export async function trickleTasksTwoStep<T>(parallel: number, tasks: () => Iter
 		let res = await queue[completecounter % parallel];
 		completecounter++;
 		steptwo(res);
+	}
+}
+
+export function taskTrickler(maxparallel = 1, delaytime = 1) {
+	let stallindex = 0;
+	let stall = new Array<Promise<any>>(maxparallel).fill(Promise.resolve());
+	return function gate(task: () => Promise<any>) {
+		let res = stall[stallindex].then(() => task());
+		stall[stallindex] = res
+			.finally(() => { delaytime != 0 && delay(delaytime) });
+		stallindex = (stallindex + 1) % maxparallel;
+		return res;
 	}
 }
 
@@ -685,4 +773,11 @@ export function findParentElement(el: HTMLElement | null, cond: (el: HTMLElement
 		el = el.parentElement;
 	}
 	return fallback;
+}
+
+export function prettyFileSize(size: number) {
+	if (size < 1024) { return size + " B"; }
+	if (size < 1024 * 1024) { return (size / 1024).toFixed(2) + " KB"; }
+	if (size < 1024 * 1024 * 1024) { return (size / (1024 * 1024)).toFixed(2) + " MB"; }
+	return (size / (1024 * 1024 * 1024)).toFixed(2) + " GB";
 }

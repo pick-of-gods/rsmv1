@@ -2,7 +2,7 @@ import { CacheFileSource, CacheIndex, SubFile } from "../cache";
 import { GameCacheLoader } from "../cache/sqlite";
 import { FileRange, getOrInsert } from "../utils";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
-import { cacheFileDecodeModes, DecodeMode, DecodeModeFactory } from "./filetypes";
+import { cacheFileDecodeModes, DecodeMode, DecodeModeFactory } from "../parser/filetypes";
 
 export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, source: CacheFileSource, args: { batched: boolean, batchlimit: number, mode: string, files: FileRange[], edit: boolean, skipread: boolean }, decoderflags: Record<string, string>) {
 	let modeconstr: DecodeModeFactory = cacheFileDecodeModes[args.mode];
@@ -10,7 +10,7 @@ export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, 
 	let flags = { ...decoderflags };
 	if (args.batched || args.batchlimit != -1) { flags.batched = "true"; }
 	let mode = modeconstr(flags);
-	await mode.prepareDump(outdir, source);
+	let decodectx = await mode.prepareDump(outdir, source);
 
 	let batchMaxFiles = args.batchlimit;
 	let batchSubfile = args.batched;
@@ -60,7 +60,7 @@ export async function extractCacheFiles(output: ScriptOutput, outdir: ScriptFS, 
 			let logicalid = mode.fileToLogical(source, fileid.index.major, fileid.index.minor, file.fileid);
 
 			try {
-				var res = mode.read(file.buffer, logicalid, source);
+				var res = mode.read(file.buffer, logicalid, source, decodectx);
 				if (res instanceof Promise) { res = await res; }
 			} catch (e) {
 				output.log(`file ${logicalid.join(".")}: ${e}`);

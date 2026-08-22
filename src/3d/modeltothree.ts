@@ -8,11 +8,10 @@ import * as THREE from "three";
 import { CacheFileSource, CacheIndex, mappedFileIds, oldConfigMaps, SubFile } from "../cache";
 import { CachedObject, CachingFileSource } from "../cache/memorycache";
 import { Bone, BufferAttribute, Mesh, Object3D, Skeleton, SkinnedMesh } from "three";
-import { parse } from "../opdecoder";
+import { cacheFileJsonModes, iterateJsonFiles, parse } from "../parser/jsondecoders";
 import { mapsquare_underlays } from "../../generated/mapsquare_underlays";
 import { mapsquare_overlays } from "../../generated/mapsquare_overlays";
 import { mapscenes } from "../../generated/mapscenes";
-import { cacheFileJsonModes } from "../scripts/filetypes";
 import { JSONSchema6Definition } from "json-schema";
 import { models } from "../../generated/models";
 import { crc32, CrcBuilder } from "../libs/crc32util";
@@ -349,60 +348,27 @@ export class EngineCache extends CachingFileSource {
 	/**
 	 * very aggressive caching, do not use for objects which take a lot of memory
 	 */
-	getJsonSearchData(modename: string) {
+	getJsonSearchData(modename: keyof typeof cacheFileJsonModes) {
 		let cached = this.jsonSearchCache.get(modename);
 		if (!cached) {
-			let mode = cacheFileJsonModes[modename as keyof typeof cacheFileJsonModes];
+			let mode = cacheFileJsonModes[modename];
 			if (!mode) { throw new Error("unknown decode mode " + modename); }
 			let files = (async () => {
-				await mode.prepareDump?.(this);
 				let allfiles = await mode.lookup.logicalRangeToFiles(this, [0, 0], [Infinity, Infinity]);
-				let lastarchive: null | { index: CacheIndex, subfiles: SubFile[] } = null;
 				let files: any[] = [];
-				for (let fileid of allfiles) {
-					let arch: SubFile[];
-					if (lastarchive && lastarchive.index == fileid.index) {
-						arch = lastarchive.subfiles;
-					} else {
-						arch = await this.getFileArchive(fileid.index);
-						lastarchive = { index: fileid.index, subfiles: arch };
-					}
-					let file = arch[fileid.subindex];
-					let logicalid = mode.lookup.fileToLogical(this, fileid.index.major, fileid.index.minor, file.fileid);
-					let res = mode.parser.read(file.buffer, this.rawsource);
-					res.$fileid = (logicalid.length == 1 ? logicalid[0] : logicalid);
-					files.push(res);
-				}
-
+				await iterateJsonFiles(this, mode, allfiles, obj => {
+					files.push(obj);
+				});
 				return files;
 			})();
-			cached = { files, schema: mode.parser.parser.getJsonSchema() }
+			let schema = mode.parser.parser.getJsonSchema();
+			if (typeof schema == "object" && schema.properties) {
+				schema.properties.$filename = { oneOf: [{ type: "string" }, { type: "null" }] };
+			}
+			cached = { files, schema }
 			this.jsonSearchCache.set(modename, cached);
 		}
 		return cached;
-	}
-}
-
-export async function* iterateConfigFiles(cache: EngineCache, major: number) {
-	if (cache.legacyData) {
-		let files: Buffer[] | null = null;
-		if (major == cacheMajors.items) { files = cache.legacyData.items; }
-		else if (major == cacheMajors.npcs) { files = cache.legacyData.npcs; }
-		else if (major == cacheMajors.objects) { files = cache.legacyData.objects; }
-		else if (major == cacheMajors.spotanims) { files = cache.legacyData.spotanims; }
-		if (!files) { throw new Error(`cache major ${major} can not be iterated`); }
-		yield* files.map((file, id) => ({ id, file }));
-	} else if (cache.getBuildNr() <= 488) {
-		let arch = await cache.getArchiveById(cacheMajors.config, oldConfigMaps[major]);
-		yield* arch.map(q => ({ id: q.fileid, file: q.buffer }));
-	} else {
-		let locindices = await cache.getCacheIndex(major);
-		let stride = mappedFileIds[major];
-		for (let index of locindices) {
-			if (!index) { continue; }
-			let arch = await cache.getFileArchive(index);
-			yield* arch.map(q => ({ id: index.minor * stride + q.fileid, file: q.buffer }));
-		}
 	}
 }
 
@@ -509,7 +475,7 @@ async function convertMaterialToThree(source: ThreejsSceneCache, material: Mater
 			//threejs expects g=metal,b=roughness, rs has r=metal,g=roughness
 			for (let i = 0; i < compound.data.length; i += 4) {
 				compoundmapped.data[i + 1] = compound.data[i + 1];
-				compoundmapped.data[i + 2] = compound.data[i + 0];
+				compoundmapped.data[i + 2] = Math.min(200, compound.data[i + 0]);//cap to prevent threejs render bug making it black
 				compoundmapped.data[i + 3] = 255;
 			}
 			let tex = new THREE.DataTexture(compoundmapped.data, compoundmapped.width, compoundmapped.height, THREE.RGBAFormat);

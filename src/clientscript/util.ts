@@ -3,7 +3,7 @@ import { params } from "../../generated/params";
 import { structs } from "../../generated/structs";
 import { CacheFileSource } from "../cache";
 import { cacheConfigPages, cacheMajors } from "../constants";
-import { parse } from "../opdecoder";
+import { parse } from "../parser/jsondecoders";
 
 export async function loadParams(source: CacheFileSource) {
     let paramindex = await source.getArchiveById(cacheMajors.config, cacheConfigPages.params);
@@ -14,16 +14,8 @@ export async function loadParams(source: CacheFileSource) {
     return parammeta;
 }
 
-export async function loadEnum(source: CacheFileSource, id: number) {
-    return parse.enums.read(await source.getFileById(cacheMajors.enums, id), source);
-}
-
 export function getEnumIntPairs(enumjson: enums) {
     return (enumjson.intArrayValue1 ?? enumjson.intArrayValue2?.values)!;
-}
-
-export async function loadStruct(source: CacheFileSource, structid: number) {
-    return parse.structs.read(await source.getFileById(cacheMajors.structs, structid), source);
 }
 
 export function getEnumInt(enumjson: enums, key: number) {

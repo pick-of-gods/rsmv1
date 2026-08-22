@@ -1,9 +1,8 @@
 import { cacheMajors } from "../constants";
-import { parse } from "../opdecoder";
+import { parse } from "../parser/jsondecoders";
 import { CacheFileSource } from "../cache";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
-
-type Coord = { x: number, z: number, level: number };
+import { Coord, unpackCoordgrid } from "../utils";
 
 export async function extractCluecoords(output: ScriptOutput, fs: ScriptFS, filesource: CacheFileSource) {
 	let enums: number[] = [];
@@ -20,13 +19,8 @@ export async function extractCluecoords(output: ScriptOutput, fs: ScriptFS, file
 	let allcoords: Coord[][] = [];
 
 	for (let enumid of enums) {
-		let file = await filesource.getFileById(cacheMajors.enums, enumid);
-		let parsed = parse.enums.read(file, filesource);
-		let coords: Coord[] = parsed.intArrayValue2!.values.map(v => ({
-			x: (v[1] >> 14) & 16383,
-			z: (v[1] >> 0) & 16383,
-			level: (v[1] >> 28) & 3
-		}));
+		let parsed = await filesource.getObject("enums", enumid);
+		let coords: Coord[] = parsed.intArrayValue2!.values.map(q => unpackCoordgrid(q[1]));
 		// if (enumid == 13504) { debugger; }
 		fs.writeFile(`${enumid}.json`, JSON.stringify(coords, undefined, "\t"));
 		allcoords.push(coords);

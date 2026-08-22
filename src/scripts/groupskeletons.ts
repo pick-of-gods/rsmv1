@@ -1,5 +1,5 @@
 import { cacheMajors } from "../constants";
-import { parse } from "../opdecoder";
+import { parse } from "../parser/jsondecoders";
 import { ScriptFS, ScriptOutput } from "../scriptrunner";
 import { CacheFileSource, archiveToFileId } from "../cache";
 import prettyJson from "json-stringify-pretty-compact";
@@ -16,7 +16,7 @@ export async function getSequenceGroups(output: ScriptOutput, outdir: ScriptFS, 
         let frame0 = arch[0];
         if (frame0) {
             let frame = parse.frames.read(frame0.buffer, source);
-            frametoframemap.set(frameid.minor, frame.probably_framemap_id);
+            frametoframemap.set(frameid.minor, frame.framemap_id);
         }
     }
     output.log(`completed frames`);
@@ -27,8 +27,7 @@ export async function getSequenceGroups(output: ScriptOutput, outdir: ScriptFS, 
     for (let skeletalid of skeletalindex) {
         if (!skeletalid) { continue; }
         try {
-            let animfile = await source.getFileById(cacheMajors.skeletalAnims, skeletalid.minor);
-            let anim = parse.skeletalAnim.read(animfile, source);
+            let anim = await source.getObject("skeletons", skeletalid.minor);
             skeletaltoframemap.set(skeletalid.minor, anim.framebase);
         } catch (e) {
             // currently known error in the bzip2 decompression on file 56.2242
@@ -49,7 +48,7 @@ export async function getSequenceGroups(output: ScriptOutput, outdir: ScriptFS, 
             let seq = parse.sequences.read(sub.buffer, source);
             let mapid: number | null | undefined = null;
             if (seq.frames && seq.frames.length != 0) {
-                mapid = frametoframemap.get(seq.frames[0].frameidhi);
+                mapid = frametoframemap.get(seq.frames[0].framefile);
             }
             if (seq.skeletal_animation != null) {
                 mapid = skeletaltoframemap.get(seq.skeletal_animation);

@@ -2,20 +2,22 @@
 import { ThreeJsRenderer } from "./threejsrender";
 import * as React from "react";
 import * as ReactDOM from "react-dom/client";
-import { boundMethod } from "autobind-decorator";
-import * as datastore from "idb-keyval";
-import { EngineCache, ThreejsSceneCache } from "../3d/modeltothree";
 import { ModelBrowser, RendererControls } from "./scenenodes";
-
-import { UIScriptFile, UIScriptFS } from "./scriptsui";
-import { UIContext, SavedCacheSource, FileViewer, CacheSelector, openSavedCache, UIOpenedFile } from "./maincomponents";
+import { UIContext, CacheSelector, UIOpenedFile, UIRootContext, UIEngineContext, downloadBlob, BrowsePageId } from "./maincomponents";
 import classNames from "classnames";
-import { cliApi, CliApiContext } from "../clicommands";
-import { CLIScriptOutput } from "../scriptrunner";
-import * as cmdts from "cmd-ts";
+import { exposeDebugToolsInGlobal } from "../consoletools";
+import { useForceUpdate } from "./commoncontrols";
+import { FileDisplay } from "./viewers/fileviewer";
+import { BrowseDisplay } from "./tabs/browse";
+import { BlobTS } from "../utils";
 
-export function unload(root: ReactDOM.Root) {
-	root.unmount();
+
+exposeDebugToolsInGlobal();
+
+export function unload(obj: { root: ReactDOM.Root, ctx: UIContext }) {
+	obj.root.unmount();
+	obj.ctx.close();
+	globalThis.uicontext = null;
 }
 
 export function start(rootelement: HTMLElement, serviceworker?: boolean) {
@@ -26,136 +28,52 @@ export function start(rootelement: HTMLElement, serviceworker?: boolean) {
 
 	let ctx = new UIContext(rootelement, serviceworker ?? false);
 	let root = ReactDOM.createRoot(rootelement);
-	root.render(<App ctx={ctx} />);
+	root.render(
+		<UIRootContext.Provider value={ctx}>
+			<App />
+		</UIRootContext.Provider>
+	);
 
-	globalThis.cli = async (args: string) => {
-		let cliconsole = new CLIScriptOutput();
-		let outputs: Record<string, any> = {};
-
-		let clictx: CliApiContext = {
-			getConsole() { return cliconsole; },
-			getFs(name: string) { return outputs[name] ??= new UIScriptFS(null); },
-			getDefaultCache() { return ctx.source!; }
-		}
-		let api = cliApi(clictx);
-		let res = await cmdts.runSafely(api.subcommands, args.split(/\s+/g));
-		if (cliconsole.state == "running") {
-			cliconsole.setState(res._tag == "error" ? "error" : "done");
-		}
-		if (res._tag == "error") {
-			console.error(res.error.config.message);
-			outputs.code = res.error.config.exitCode;
-		} else {
-			outputs.code = 0;
-			// console.log("cmd completed", res.value);
-		}
-		return outputs;
-	}
-
-	return root;
+	globalThis.uicontext = ctx;
+	return { root, ctx };
 }
 
-class App extends React.Component<{ ctx: UIContext }, { openedFile: UIOpenedFile | null }> {
-	constructor(p) {
-		super(p);
-		this.state = {
-			openedFile: this.props.ctx.openedfile
-		};
-		(async () => {
-			try {
-				let c = await Promise.race([
-					datastore.get<SavedCacheSource>("openedcache"),
-					new Promise<never>((d, f) => setTimeout(f, 1000))
-				]);
-				if (c) { this.openCache(c); }
-			} catch (e) {
-				console.log("failed to open indexedDB openedcache, fallback to localStorage (without webfs support)");
-				try {
-					let cache = JSON.parse(localStorage.rsmv_openedcache!);
-					this.openCache(cache);
-				} catch (e) { }
-			};
-		})();
-	}
 
-	@boundMethod
-	async openCache(source: SavedCacheSource) {
-		let cache = await openSavedCache(source, true);
-		if (cache) {
-			globalThis.source = cache;
-			this.props.ctx.setCacheSource(cache);
+function App(p: {}) {
+	let ctx = React.useContext(UIRootContext);
 
-			try {
-				let engine = await EngineCache.create(cache);
-				console.log("engine loaded", cache.getBuildNr());
-				let scene = await ThreejsSceneCache.create(engine);
-				this.props.ctx.setSceneCache(scene);
+	let initCnv = React.useCallback((cnv: HTMLCanvasElement | null) => {
+		ctx.setRenderer(cnv ? new ThreeJsRenderer(cnv) : null);
+	}, []);
 
-				globalThis.sceneCache = scene;
-				globalThis.engine = engine;
-			} catch (e) {
-				console.log("failed to create scenecache");
-				console.error(e);
-			}
-		};
-	}
+	let redraw = useForceUpdate();
+	React.useEffect(() => {
+		ctx.on("statechange", redraw);
+		ctx.on("showTab", redraw);
+		window.addEventListener("resize", redraw);
+		return () => {
+			ctx.off("statechange", redraw);
+			ctx.off("showTab", redraw);
+			window.removeEventListener("resize", redraw);
+		}
+	}, [ctx]);
 
-	@boundMethod
-	initCnv(cnv: HTMLCanvasElement | null) {
-		this.props.ctx.setRenderer(cnv ? new ThreeJsRenderer(cnv) : null);
-	}
+	let width = ctx.rootElement.clientWidth;
+	let vertical = width < 550;
 
-	@boundMethod
-	closeCache() {
-		datastore.del("openedcache");
-		localStorage.rsmv_openedcache = "";
-		navigator.serviceWorker?.ready.then(q => q.active?.postMessage({ type: "sethandle", handle: null }));
-		this.props.ctx.source?.close();
-		this.props.ctx.setCacheSource(null);
-		this.props.ctx.setSceneCache(null);
-	}
+	let visibletab = (ctx.source && ctx.activeTabIndex != -1 ? ctx.openedTabs[ctx.activeTabIndex] : null);
 
-	@boundMethod
-	stateChanged() {
-		this.forceUpdate();
-	}
-
-	@boundMethod
-	resized() {
-		this.forceUpdate();
-	}
-
-	componentDidMount() {
-		this.props.ctx.on("openfile", this.openFile);
-		this.props.ctx.on("statechange", this.stateChanged);
-		window.addEventListener("resize", this.resized);
-	}
-
-	componentWillUnmount() {
-		this.props.ctx.off("openfile", this.openFile);
-		this.props.ctx.off("statechange", this.stateChanged);
-		window.removeEventListener("resize", this.resized);
-		this.closeCache();
-	}
-
-	@boundMethod
-	openFile(file: UIOpenedFile | null) {
-		this.setState({ openedFile: file });
-	}
-
-	render() {
-		let width = this.props.ctx.rootElement.clientWidth;
-		let vertical = width < 550;
-
-		let cachemeta = this.props.ctx.source?.getCacheMeta();
-		return (
+	let cachemeta = ctx.source?.getCacheMeta();
+	return (
+		<UIEngineContext.Provider value={ctx.renderable}>
 			<div className={classNames("mv-root", "mv-style", { "mv-root--vertical": vertical })}>
-				<canvas className="mv-canvas" ref={this.initCnv} style={{ display: this.state.openedFile ? "none" : "block" }}></canvas>
-				{this.state.openedFile && <FileViewer file={this.state.openedFile} onSelectFile={this.props.ctx.openFile} />}
+				<canvas className="mv-canvas" ref={initCnv} style={{ display: visibletab ? "none" : "block" }}></canvas>
+				{visibletab?.type == "file" && <FileViewer file={visibletab} onSelectFile={ctx.openFile} />}
+				{visibletab?.type == "browse" && <BrowseViewer browse={visibletab} onSelectFile={ctx.openFile} />}
 				<div className="mv-sidebar">
-					{!this.props.ctx.source && (
+					{!ctx.source && (
 						<React.Fragment>
-							<CacheSelector onOpen={this.openCache} />
+							<CacheSelector onOpen={ctx.openCache} />
 							<div style={{ flex: "1" }} />
 							<div style={{ textAlign: "center" }}>
 								Go to <a href="https://runeapps.org/modelviewer_about">RuneApps</a> for more info. Source code hosted at <a href="https://github.com/skillbert/rsmv" target="_blank">github.com/skillbert/rsmv</a>
@@ -164,13 +82,45 @@ class App extends React.Component<{ ctx: UIContext }, { openedFile: UIOpenedFile
 					)}
 					{cachemeta && (
 						<React.Fragment>
-							<input type="button" className="sub-btn" onClick={this.closeCache} value={`Close ${cachemeta.name}`} title={cachemeta.descr} />
-							<RendererControls ctx={this.props.ctx} />
-							<ModelBrowser ctx={this.props.ctx} />
+							<input type="button" className="sub-btn" onClick={ctx.closeCache} value={`Close ${cachemeta.name}`} title={cachemeta.descr} />
+							<RendererControls />
+							<ModelBrowser />
 						</React.Fragment>
 					)}
 				</div>
-			</div >
-		);
-	}
+			</div>
+		</UIEngineContext.Provider>
+	);
 }
+
+
+export function FileViewer(p: { file: UIOpenedFile, onSelectFile: (f: UIOpenedFile | null) => void }) {
+	return (
+		<div style={{ display: "grid", gridTemplateRows: "auto 1fr" }}>
+			<div className="mv-modal-head">
+				<span>{p.file.name}</span>
+				<span style={{ float: "right", marginLeft: "10px" }} onClick={e => downloadBlob(p.file.name, new BlobTS([p.file.data]))}>download</span>
+				<span style={{ float: "right", marginLeft: "10px" }} onClick={e => p.onSelectFile(null)}>x</span>
+			</div>
+			<div style={{ overflow: "auto", flex: "1", position: "relative" }}>
+				<FileDisplay file={p.file} />
+			</div>
+		</div>
+	);
+}
+
+
+export function BrowseViewer(p: { browse: BrowsePageId, onSelectFile: (f: UIOpenedFile | null) => void }) {
+	return (
+		<div style={{ display: "grid", gridTemplateRows: "auto 1fr" }}>
+			<div className="mv-modal-head">
+				<span>{p.browse.id}</span>
+				<span style={{ float: "right", marginLeft: "10px" }} onClick={e => p.onSelectFile(null)}>x</span>
+			</div>
+			<div style={{ overflow: "auto", flex: "1", position: "relative" }}>
+				<BrowseDisplay browse={p.browse} />
+			</div>
+		</div>
+	);
+}
+

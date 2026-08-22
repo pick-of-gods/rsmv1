@@ -1,38 +1,28 @@
 import { cacheMajors } from "../constants";
+import { AbstractSQLiteStatement, AbstractSQLiteWorker } from "../libs/sqlite3wrap";
+import { decompress } from "./compression";
 import * as cache from "./index";
-import type { WorkerPackets } from "./sqlitewasmworker";
 
+
+type CacheTableAccess = {
+	table: AbstractSQLiteWorker,
+	getfile: AbstractSQLiteStatement<[number], { DATA: Uint8Array, CRC: number }>,
+	getindex: AbstractSQLiteStatement<[], { DATA: Uint8Array }>
+}
+
+type CacheTable = {
+	major: number,
+	table: CacheTableAccess | null,
+	tableready: Promise<CacheTableAccess> | null,
+	file: File
+}
 
 export class WasmGameCacheLoader extends cache.CacheFileSource {
 	indices = new Map<number, Promise<cache.CacheIndexFile>>();
-	dbfiles: Record<string, Blob> = {};
-	worker: Worker;
-	msgidcounter = 1;
-	callbacks = new Map<number, { resolve: (res: any) => void, reject: (err: Error) => void, reqpacket: WorkerPackets }>();
+	dbfiles: Map<number, CacheTable> = new Map();
 	timestamp = new Date();
 	constructor() {
 		super();
-		//@ts-ignore this whole line gets consumed by webpack, turns to static string in webpack
-		this.worker = new Worker(new URL("./sqlitewasmworker.ts", import.meta.url));
-		this.worker.onmessage = e => {
-			let handler = this.callbacks.get(e.data.id);
-			if (e.data.error) {
-				if (handler) {
-					let err = e.data.error;
-					if (handler.reqpacket.type == "getfile") {
-						err += `\n in getfile ${handler.reqpacket.major}.${handler.reqpacket.minor}`;
-					} else if (handler.reqpacket.type == "getindex") {
-						err += `\n in getindex ${handler.reqpacket.major}`;
-					} else {
-						err += `\n in other ${handler.reqpacket.type}`;
-					}
-					handler.reject(new Error(err));
-				}
-			} else {
-				handler?.resolve(e.data.packet);
-			}
-			this.callbacks.delete(e.data.id);
-		}
 	}
 	getCacheMeta() {
 		return {
@@ -46,38 +36,42 @@ export class WasmGameCacheLoader extends cache.CacheFileSource {
 		console.log("using generated cache index file meta, crc size and version missing");
 
 		let majors: cache.CacheIndex[] = [];
-		for (let file of Object.keys(this.dbfiles)) {
-			let m = file.match(/js5-(\d+)\.jcache$/);
-			if (m) {
-				majors[m[1]] = {
-					major: cacheMajors.index,
-					minor: +m[1],
-					crc: 0,
-					size: 0,
-					subindexcount: 1,
-					subindices: [0],
-					version: 0,
-					uncompressed_crc: 0,
-					uncompressed_size: 0
-				};
-			}
+		for (let file of this.dbfiles.values()) {
+			majors[file.major] = {
+				major: cacheMajors.index,
+				minor: file.major,
+				crc: 0,
+				size: 0,
+				subindexcount: 1,
+				subindices: [0],
+				name: null,
+				subnames: null,
+				version: 0,
+				uncompressed_crc: 0,
+				uncompressed_size: 0
+			};
 		}
 
 		return majors;
 	}
-
-	sendWorker(packet: WorkerPackets) {
-		let id = this.msgidcounter++;
-		this.worker.postMessage({ id, packet });
-		return new Promise((resolve, reject) => this.callbacks.set(id, { resolve, reject, reqpacket: packet }));
-	}
-
-	giveBlobs(blobs: Record<string, Blob>) {
-		Object.assign(this.dbfiles, blobs);
-		this.sendWorker({ type: "blobs", blobs });
+	giveBlobs(blobs: Record<string, File>) {
+		for (let file of Object.values(blobs)) {
+			let m = file.name.match(/js5-(\d+)\.jcache$/);
+			if (m) {
+				let major = +m[1];
+				if (!this.dbfiles.get(major)) {
+					this.dbfiles.set(major, {
+						major,
+						table: null,
+						tableready: null,
+						file
+					});
+				}
+			}
+		}
 	}
 	async giveFsDirectory(dir: FileSystemDirectoryHandle) {
-		let files: Record<string, Blob> = {};
+		let files: Record<string, File> = {};
 		if (await dir.queryPermission() != "granted") {
 			console.log("tried to open cache without permission");
 			return null;
@@ -93,8 +87,11 @@ export class WasmGameCacheLoader extends cache.CacheFileSource {
 
 	async getFile(major: number, minor: number, crc?: number) {
 		if (major == cacheMajors.index) { return this.getIndexFile(minor); }
-		let data = await this.sendWorker({ type: "getfile", major, minor, crc }) as Uint8Array;
-		return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+		let index = this.prepareTable(major);
+		let table = index.table ?? await index.tableready;
+		let [row] = await table.getfile.run(minor);
+		let res = Buffer.from(row.DATA.buffer, row.DATA.byteOffset, row.DATA.byteLength);
+		return decompress(res);
 	}
 
 	async getFileArchive(index: cache.CacheIndex) {
@@ -113,12 +110,31 @@ export class WasmGameCacheLoader extends cache.CacheFileSource {
 	}
 
 	async getIndexFile(major: number) {
-		let data = await this.sendWorker({ type: "getindex", major }) as Uint8Array;
-		return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+		let [row] = await this.prepareTable(major).tableready.then(q => q.getindex.run());
+		let res = Buffer.from(row.DATA.buffer, row.DATA.byteOffset, row.DATA.byteLength);
+		return decompress(res);
 	}
 
 	close() {
-		//TODO this will break if we are doing writes
-		this.worker.terminate();
+		this.dbfiles.forEach(file => file.table?.table.close());
+		this.dbfiles.clear();
+	}
+
+	prepareTable(major: number) {
+		let index = this.dbfiles.get(major);
+		if (!index) {
+			throw new Error(`no cache file for major ${major}`);
+		}
+		if (!index.table) {
+			index.tableready = (async () => {
+				let table = await AbstractSQLiteWorker.create(`js5-${major}.jcache`, index.file);
+				let getfile = await table.prepare<[number], { DATA: Uint8Array, CRC: number }>(`SELECT DATA,CRC FROM cache WHERE KEY=?`);
+				let getindex = await table.prepare<[], { DATA: Uint8Array }>(`SELECT DATA FROM cache_index`);
+				let cacheTableAccess: CacheTableAccess = { table, getfile, getindex };
+				index.table = cacheTableAccess;
+				return cacheTableAccess;
+			})();
+		}
+		return index as CacheTable & { tableready: Promise<CacheTableAccess> };
 	}
 }
