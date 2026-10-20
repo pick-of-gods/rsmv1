@@ -6,19 +6,19 @@ import { pixelsToDataUrl } from "../../imgutils";
 import { JSONSchema6Definition } from "json-schema";
 import { loadParams } from "../../clientscript/util";
 import classNames from "classnames";
-import { BlobTS, HSL2RGB, packedHSL2HSL, RGB2HSL, taskTrickler, unpackComponent, unpackCoordgrid } from "../../utils";
+import { BlobTS, HSL2RGB, packedHSL2HSL, RGB2HSL, taskTrickler } from "../../utils";
 import { BlobImage, useAwaited } from "../commoncontrols";
 import { parseMusic } from "../../scripts/musictrack";
-import { makeFileId } from "../tabs/browse";
+import { BrowseModes, makeFileId } from "../tabs/browse";
 import { dbrows } from "../../../generated/dbrows";
-import { BrowsableType, IndexGraphLoader, iterateTypedJson, vartypeToDecoder } from "../../scripts/jsonindexer";
+import { ExtendedJsonFieldTypes, IndexGraphLoader, iterateTypedJson, packedIntToLogical, vartypeToDecoder } from "../../scripts/jsonindexer";
 import { CacheFileSource } from "../../cache";
-import { cacheFileJsonModes } from "../../parser/jsondecoders";
 import { cacheFileDecodeModes } from "../../parser/filetypes";
 
 type DeepLinkElement = {
-    rsmvtype: BrowsableType,
+    rsmvtype: ExtendedJsonFieldTypes,
     name: string,
+    nameobj?: string,
     valuename?: string | undefined,
     primitive?: string | number | boolean | null,
     items?: DeepLinkElement[],
@@ -68,12 +68,14 @@ const skillNames = [
 async function deepLinkParamtable(ctx: DeepLinkContext, value: any[]) {
     let paramData = await loadParams(ctx.source);
     let paramNames = await ctx.source.getInternalNameList(internalNameFiles.param);
-    return Promise.all(value.map<Promise<DeepLinkElement>>(q => {
+    return Promise.all(value.map<Promise<DeepLinkElement>>(async q => {
         let paramname = paramNames.get(q.prop) ?? `param_${q.prop}`;
         let paramdata = paramData.get(q.prop);
         let typeid = paramdata?.type?.vartype ?? -1;
         let typename = vartypeReverseMap.get(typeid) ?? "unknown"
-        return deepLinkJson(ctx, paramname, q.intvalue ?? q.stringvalue, { "x-rsmv-type": typename } as any);
+        let res = await deepLinkJson(ctx, paramname, q.intvalue ?? q.stringvalue, { "x-rsmv-type": typename } as any);
+        res.nameobj = `params_${q.prop}`;
+        return res;
     }));
 }
 
@@ -83,7 +85,7 @@ async function deepLinkJson(ctx: DeepLinkContext, nameorindex: string | number, 
     ctx.objstack.push(data);
     try {
         // === find expected type ===
-        let rsmvtype: BrowsableType;
+        let rsmvtype: ExtendedJsonFieldTypes;
         ({ rsmvtype, data, meta } = iterateTypedJson(ctx.objstack, meta, data, nameorindex));
 
         // === handle data type ===
@@ -109,8 +111,8 @@ async function deepLinkJson(ctx: DeepLinkContext, nameorindex: string | number, 
         } else if (typeof data == "string" || typeof data == "boolean" || data == null) {
             return { name, rsmvtype, primitive: data };
         } else if (Array.isArray(data)) {
-            if (rsmvtype == "params") {
-                return { name, rsmvtype: "params", items: await deepLinkParamtable(ctx, data) };
+            if (rsmvtype == "paramtable") {
+                return { name, rsmvtype: "paramtable", items: await deepLinkParamtable(ctx, data) };
             }
             let subs: DeepLinkElement[] = [];
             for (let i = 0; i < data.length; i++) {
@@ -154,7 +156,7 @@ let resourceloadlimit = taskTrickler(20);
 function SpriteView(p: { id: number }) {
     let enginectx = React.useContext(UIEngineContext);
     let imgurl = useAwaited(abort => {
-        if (!enginectx) { return; }
+        if (!enginectx || p.id == -1) { return; }
         return resourceloadlimit(async () => {
             if (abort.aborted) { return; }
             let file = await enginectx.source.getFileById(cacheMajors.sprites, p.id);
@@ -163,7 +165,7 @@ function SpriteView(p: { id: number }) {
         });
     }, [p.id], 200);
 
-    return <img src={imgurl ?? undefined} />;
+    return <img className="mv-propobject" src={imgurl ?? undefined} />;
 }
 
 function TextureView(p: { id: number }) {
@@ -177,7 +179,7 @@ function TextureView(p: { id: number }) {
         })
     }, [p.id], 200);
 
-    return <img src={imgurl ?? undefined} />;
+    return <img className="mv-propobject" src={imgurl ?? undefined} />;
 }
 
 function CursorView(p: { id: number }) {
@@ -190,7 +192,7 @@ function CursorView(p: { id: number }) {
             return parsed.cursor;
         });
     }, [p.id, enginectx], 200);
-    return <SpriteView id={spriteid ?? 0} />;
+    return spriteid && <SpriteView id={spriteid} />;
 }
 
 function SoundView(p: { id: number }) {
@@ -210,7 +212,7 @@ function SoundView(p: { id: number }) {
         if (soundblob) { URL.revokeObjectURL(soundblob); }
     }, [soundblob]);
 
-    return <audio src={soundblob ?? undefined} controls />;
+    return <audio className="mv-propobject" src={soundblob ?? undefined} controls />;
 }
 
 function JsonImgFileView(p: { file: Uint8Array | string }) {
@@ -218,7 +220,7 @@ function JsonImgFileView(p: { file: Uint8Array | string }) {
     return <BlobImage file={filedata} ext="png" />;
 }
 
-function ColorView(p: { hsl?: number, rgb?: number[] }) {
+function ColorView(p: { hsl?: number, rgb?: number[], hexrgb?: number }) {
     let alpha = 255;
     let hasalpha = false;
     let color = [0, 0, 0];
@@ -228,6 +230,10 @@ function ColorView(p: { hsl?: number, rgb?: number[] }) {
         let hsl = packedHSL2HSL(p.hsl);
         color = HSL2RGB(hsl);
         colorstring = "" + p.hsl;
+    }
+    if (p.hexrgb !== undefined) {
+        color = [(p.hexrgb >> 16) & 0xFF, (p.hexrgb >> 8) & 0xFF, p.hexrgb & 0xFF];
+        colorstring = color.join(" ");
     }
     if (p.rgb !== undefined) {
         if (p.rgb.length == 4) {
@@ -440,54 +446,48 @@ function DBRowsView(p: { data: DeepLinkElement }) {
     </div>;
 }
 
-function ObjectLink(p: { prop: DeepLinkElement }) {
+export function ObjectLink(p: { prop?: DeepLinkElement, rsmvtype?: ExtendedJsonFieldTypes, value?: number, valuename?: string }) {
+    let rsmvtype = p.rsmvtype ?? p.prop?.rsmvtype ?? "unknown";
+    let value = p.value ?? p.prop?.primitive ?? -1;
+    let valuename = p.valuename ?? p.prop?.valuename;
     let ctx = React.useContext(UIRootContext);
-    let match = vartypeToDecoder[p.prop.rsmvtype];
-    if (typeof p.prop.primitive != "number") { throw new Error("Objectlink primitive type number expected"); }
+    let mousedown = React.useCallback((e: React.MouseEvent) => e.button == 1 && e.preventDefault(), []);
 
-    let index = [p.prop.primitive];
-    if (p.prop.rsmvtype == "component") {
-        let { intf, sub } = unpackComponent(p.prop.primitive);
-        index = [intf, sub];
-    }
-    if (p.prop.rsmvtype == "coordgrid") {
-        let { level, x, z } = unpackCoordgrid(p.prop.primitive);
-        index = [level, x, z];
+    if (typeof value != "number") { throw new Error("Objectlink primitive type number expected"); }
+
+    if (rsmvtype == "" || rsmvtype == "unknown" || rsmvtype == 'int') {
+        return <span>{value}</span>;
     }
 
-    let fileid = makeFileId(p.prop.rsmvtype, index);
+    let match = vartypeToDecoder[rsmvtype];
+    let index = match ? packedIntToLogical(value, match) : [value];
+    let fileid = makeFileId(rsmvtype, index);
 
-    let onclick = (e: React.MouseEvent) => {
-        e.preventDefault();
-        ctx.openFile({ type: "browse", id: fileid });
-    }
-
-    return <>
-        <span className={match && "mv-filelink"} onClick={match && onclick}>{fileid}</span>
-        {p.prop.valuename ? ` (${p.prop.valuename})` : null}
-    </>
+    return <span className="mv-objectentry" title={valuename}>
+        <span className={match && "mv-filelink"} data-objectid={fileid} onClick={ctx.objectClick} onAuxClick={ctx.objectClick} onMouseDown={mousedown}>{fileid}</span>
+        {valuename ? ` (${valuename})` : null}
+    </span>
 }
 
 export function renderPrimitive(prop: DeepLinkElement) {
     if (typeof prop.primitive == "number") {
-        if (prop.rsmvtype == "" || prop.rsmvtype == "unknown" || prop.rsmvtype == 'int') {
-            return { isbig: false, el: <span>{prop.primitive}</span> };
-        }
-
         if (prop.rsmvtype == "color") {
             return { isbig: false, el: <ColorView hsl={prop.primitive} /> };
         }
+        if (prop.rsmvtype == "rgb" || prop.rsmvtype == "argb") {
+            return { isbig: false, el: <ColorView hexrgb={prop.primitive} /> };
+        }
         if (prop.rsmvtype == "graphic") {
-            return { isbig: false, el: <div><ObjectLink prop={prop} /><br /><SpriteView id={prop.primitive} /></div> };
+            return { isbig: false, el: <div><ObjectLink prop={prop} /><SpriteView id={prop.primitive} /></div> };
         }
         if (prop.rsmvtype == "texture") {
-            return { isbig: false, el: <div><ObjectLink prop={prop} /><br /><TextureView id={prop.primitive} /></div> };
+            return { isbig: false, el: <div><ObjectLink prop={prop} /><TextureView id={prop.primitive} /></div> };
         }
         if (prop.rsmvtype == "cursor") {
-            return { isbig: false, el: <div><ObjectLink prop={prop} /><br /><CursorView id={prop.primitive} /></div> };
+            return { isbig: false, el: <div><ObjectLink prop={prop} /><CursorView id={prop.primitive} /></div> };
         }
         if (prop.rsmvtype == "sound") {
-            return { isbig: false, el: <div><ObjectLink prop={prop} /><br /><SoundView id={prop.primitive} /></div> };
+            return { isbig: false, el: <div><ObjectLink prop={prop} /><SoundView id={prop.primitive} /></div> };
         }
         if (prop.rsmvtype == "boolean") {
             return { isbig: false, el: <span>{prop.primitive ? "true" : "false"}</span> };
@@ -520,11 +520,16 @@ export function renderPrimitive(prop: DeepLinkElement) {
     return null;
 }
 
-export function StructView(p: { data: any, meta: JSONSchema6Definition | null | undefined }) {
+export function StructDataView(p: { data: any, meta: JSONSchema6Definition | null | undefined }) {
     let [maxarraylen, setmaxarraylen] = React.useState(1000);
-    let source = React.useContext(UIEngineContext)?.source;
+    let ctx = React.useContext(UIRootContext);
+    let engine = React.useContext(UIEngineContext);
+    let source = engine?.source;
     let data = useAwaited(async () => {
-        return source && deepLinkJson(new DeepLinkContext(source), "root", p.data, p.meta);
+        if (!source) { return { status: "error", message: "No file source" } as const; }
+        return deepLinkJson(new DeepLinkContext(source), "root", p.data, p.meta)
+            .then(res => ({ status: "ready", data: res } as const))
+            .catch(err => ({ status: "error", message: (err as Error).message } as const));
     }, [p.data, p.meta, source], 200);
 
     let handlenode = (prop: DeepLinkElement, isroot = false): { isbig: boolean, el: JSX.Element } => {
@@ -555,17 +560,20 @@ export function StructView(p: { data: any, meta: JSONSchema6Definition | null | 
             let el = <div className={classNames({ "mv-proplist": true, "mv-proplist--nested": !isroot })}>
                 {prop.items.map((q, i) => {
                     let child = handlenode(q);
+                    let nameel = (q.nameobj
+                        ? <div className="mv-proplist__name mv-sublelink" data-objectid={q.nameobj} onClick={ctx.objectClick}>{q.name}</div>
+                        : <div className="mv-proplist__name">{q.name}</div>);
                     if (child.isbig) {
                         return (
                             <div key={i} className="mv-proplist__entry">
-                                <div className="mv-proplist__name">{q.name}</div>
+                                {nameel}
                                 {child.el}
                             </div>
                         );
                     } else {
                         return (
                             <React.Fragment key={i}>
-                                <div className="mv-proplist__name">{q.name}</div>
+                                {nameel}
                                 <div className="mv-proplist__value">{child.el}</div>
                             </React.Fragment>
                         );
@@ -576,56 +584,67 @@ export function StructView(p: { data: any, meta: JSONSchema6Definition | null | 
         }
         return { isbig: false, el: <span>NULL</span> };
     }
+    if (!data) { return <span>Loading...</span>; }
+    if (data.status == "error") { return <span>Error loading data: {data.message}</span>; }
+    if (data.status == "ready") { return handlenode(data.data, true).el; }
+}
 
+export function StructView(p: { data: any, meta: JSONSchema6Definition | null | undefined }) {
     let decoder = p.data?.$decoder ?? "unknown";
     let fileidstring = (p.data?.$fileid != undefined ? (Array.isArray(p.data.$fileid) ? p.data.$fileid.join(".") : p.data.$fileid) : "");
     let filename = p.data?.$filename ?? "";
+    let fileid: number[] = p.data?.$fileid != undefined ? (Array.isArray(p.data.$fileid) ? p.data.$fileid : [p.data.$fileid]) : undefined;
 
     return (
         <div style={{ userSelect: "text" }}>
             <h3>{decoder}_{fileidstring} - {filename}</h3>
-            {data ? handlenode(data, true).el : <span>Loading...</span>}
+            <StructDataView data={p.data} meta={p.meta} />
             <h3>Referenced By</h3>
-            <ReferencesView jsonmode={p.data?.$decoder ?? "unknown"} id={p.data?.$fileid} />
+            <ReferencesView browsemode={p.data?.$decoder ?? "unknown"} id={fileid} />
         </div>
     );
 }
 
-export function ReferencesView(p: { jsonmode: string, id: unknown }) {
+export function ReferencesView(p: { browsemode?: BrowseModes, id?: number[] }) {
     let ctx = React.useContext(UIRootContext);
+    let valid = p.browsemode && p.id != undefined;
 
     let refs = useAwaited(async () => {
-        if (!ctx.source) { return null; }
+        if (!ctx.source || !valid) { return null; }
         let id = p.id;
         if (typeof id == "number") { id = [id]; }
         if (!Array.isArray(id)) { return null; }
         let graph = await IndexGraphLoader.forCache(ctx.source).load(ctx.source);
-        let res = await graph.findReferences(p.jsonmode as keyof typeof cacheFileJsonModes, id);
-        return Promise.all(res.map(async q => {
-            let decoder = cacheFileDecodeModes[q.srcmode as keyof typeof cacheFileDecodeModes];
-            let namefile = decoder?.({}).internalNamefile;
-            let name = (namefile == undefined ? "" : await ctx.source!.getInternalName(namefile, q.srclogical[0]));
-            return {
-                srcobject: q.srcobject,
-                propname: q.propname,
-                name: name ?? ""
-            }
+        let proptype = Object.entries(vartypeToDecoder).filter(q => q[1] == p.browsemode).map(q => q[0] as ExtendedJsonFieldTypes);
+        let limit = 1000;
+        let sublists = await Promise.all(proptype.map(q => graph.findReferences(q, id, limit)));
+        let links = await Promise.all(sublists.flat().map(async q => {
+            let decoder = cacheFileDecodeModes[q.srcdecoder];
+            let decoderinst = decoder?.({});
+            let rstype = decoderinst.rstype;
+            let namefile = decoderinst?.internalNamefile;
+            let name = (namefile == undefined ? "" : await ctx.source!.getInternalName(namefile, q.srcpacked));
+            let res: DeepLinkElement = {
+                rsmvtype: rstype ?? q.srcdecoder as any,
+                primitive: q.srcpacked,
+                name: q.propname,
+                valuename: name ?? "",
+            };
+            return res;
         }));
-    }, [ctx.source, p.jsonmode, p.id]);
-
-    let onclick = (e: React.MouseEvent<HTMLSpanElement>) => {
-        e.preventDefault();
-        ctx.openFile({ type: "browse", id: e.currentTarget.dataset.fileid! });
-    }
+        let truncated = sublists.some(q => q.length >= limit);
+        return { links, truncated };
+    }, [ctx.source, p.browsemode, p.id?.join("_")]);
 
     return <div className="mv-proplist">
-        {refs && refs.map(q => <React.Fragment key={q.srcobject}>
+        {refs && refs.links && refs.links.map((q, i) => <React.Fragment key={i}>
             <div className="mv-proplist__value">
-                <span className="mv-filelink" data-fileid={q.srcobject} onClick={onclick}>{q.srcobject}</span>
-                {q.name && ` (${q.name})`}
+                <ObjectLink prop={q} />
             </div>
-            <div className="mv-proplist__name">{q.propname}</div>
+            <div className="mv-proplist__name">{q.name}</div>
         </React.Fragment>)}
-        {!refs && <span>Loading...</span>}
+        {refs && refs.truncated && <span>Results truncated</span>}
+        {refs && refs.links && refs.links.length == 0 && <span>No references found</span>}
+        {!refs && valid && <span>Loading...</span>}
     </div>
 }

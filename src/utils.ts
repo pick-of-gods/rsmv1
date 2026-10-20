@@ -466,23 +466,29 @@ export function packCoordgrid(level: number, x: number, z: number) {
 	return ((level & 0x3) << 28) | ((x & 0x3FFF) << 14) | (z & 0x3FFF);
 }
 
+export function unpackDBTableField(tablefield: number) {
+	let dbtable = (tablefield >> 12) & 0xffff;
+	let columnid = (tablefield >> 4) & 0xff;
+	let subfield = tablefield & 0xf;
+	return { dbtable, columnid, subfield };
+}
+
 export function unpackComponent(comp: number) {
 	let intf = (comp >>> 16) & 0xFFFF;
 	let sub = comp & 0xFFFF;
 	return { intf, sub };
 }
 
+export function packFrameid(file: number, index: number) {
+	return (file << 16) | index;
+}
+export function unpackFrameid(value: number) {
+	let file = (value >>> 16) & 0xFFFF;
+	let index = value & 0xFFFF;
+	return { file, index };
+}
+
 export function packComponent(intf: number, sub: number) {
-	return (intf << 16) | sub;
-}
-
-export function unpackAnimFrame(comp: number) {
-	let intf = (comp >>> 16) & 0xFFFF;
-	let sub = comp & 0xFFFF;
-	return { intf, sub };
-}
-
-export function packAnimFrame(intf: number, sub: number) {
 	return (intf << 16) | sub;
 }
 
@@ -593,7 +599,7 @@ export async function trickleTasksTwoStep<T>(parallel: number, tasks: () => Iter
 export function taskTrickler(maxparallel = 1, delaytime = 1) {
 	let stallindex = 0;
 	let stall = new Array<Promise<any>>(maxparallel).fill(Promise.resolve());
-	return function gate(task: () => Promise<any>) {
+	return function gate<T>(task: () => Promise<T>) {
 		let res = stall[stallindex].then(() => task());
 		stall[stallindex] = res
 			.finally(() => { delaytime != 0 && delay(delaytime) });

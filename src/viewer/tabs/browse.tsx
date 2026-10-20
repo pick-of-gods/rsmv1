@@ -1,4 +1,4 @@
-import React, { useContext, useMemo } from "react";
+import React, { useContext } from "react";
 import { checkObject, delay, stringToFileRange } from "../../utils";
 import { LookupModeProps } from "../scenenodes";
 import { cacheFileJsonModes } from "../../parser/jsondecoders";
@@ -8,18 +8,22 @@ import { jsonCacheSearch, JsonSearchFilter, showModal } from "../jsonsearch";
 import { FileListView, UIScriptConsole, UIScriptOutput, UIScriptStatus } from "../scriptsui";
 import { JsonViewer } from "../viewers/fileviewer";
 import { ClientScriptDeobLoader, renderClientScript } from "../../clientscript";
-import { cacheMajors } from "../../constants";
+import { cacheMajors, internalNameFiles } from "../../constants";
 import { parseSprite } from "../../3d/materials/sprite";
 import { RsUIViewer } from "../viewers/rsuiviewer";
-import { cacheFileDecodeModes } from "../../parser/filetypes";
+import { cacheFileDecodeModes, DecodeMode } from "../../parser/filetypes";
 import { parseMusic } from "../../scripts/musictrack";
 import { CheapMapView, MapviewMarker } from "../viewers/mappreview";
 import prettyJson from "json-stringify-pretty-compact";
 import { CacheFileSource } from "../../cache";
 import { IndexGraphLoader, vartypeToDecoder } from "../../scripts/jsonindexer";
 import { ScriptOutput } from "../../scriptrunner";
+import { ReferencesView } from "../viewers/configview";
+import { identityKitToModel, itemToModel, locToModel, materialToModel, modelToModel, npcBodyToModel, SimpleModelInfo, spotAnimToModel } from "../../3d/scene";
+import { ThreejsSceneCache } from "../../3d/modeltothree";
+import { RSModel } from "../../3d/scene/model";
 
-export type BrowseModes = keyof typeof cacheFileJsonModes | "clientscript" | "interfaceviewer" | "sprites" | "sounds" | "music" | "coordgrid";
+export type BrowseModes = keyof typeof cacheFileJsonModes | "clientscript" | "interfaceviewer" | "categories" | "sprites" | "sounds" | "music" | "coordgrid";
 
 const modeOverrides: Partial<Record<BrowseModes, { jsonNameProperty?: string }>> = {
     items: { jsonNameProperty: "name" },
@@ -46,50 +50,49 @@ export function fileIdToIndex(fileid: string) {
         }
     }
     if (mode in vartypeToDecoder) { mode = vartypeToDecoder[mode]; }
-    if (mode != "coordgrid" && !cacheFileDecodeModes[mode as BrowseModes]) { return null; }
+    if (mode != "coordgrid" && mode != "interfaces" && mode != "categories" && !cacheFileDecodeModes[mode as BrowseModes]) { return null; }
     return { mode: mode as BrowseModes, index };
 }
 
 
-function AdvancedIdInputSearch(p: { modename: BrowseModes, initialValue: string, initialMode: string, onSearch: (search: string, searchmode: string) => void, onFileSelect: (id: string) => void }) {
-    let mode = cacheFileDecodeModes[p.modename]?.({}) ?? null;
+function AdvancedIdInputSearch(p: { modename: BrowseModes, initialValue: string, initialMode: string, onSearch: (search: string, searchmode: string) => void, onFileSelect: (id: string, newtab: boolean) => void }) {
+    let mode = (cacheFileDecodeModes[p.modename]?.({}) ?? null) as DecodeMode | null;
     let overrides = modeOverrides[p.modename] ?? {};
     let ctx = useContext(UIRootContext);
     let engine = useContext(UIEngineContext)?.sceneCache.engine;
 
-    let activetab = useEmitterProperty(ctx, "showTab", e => e.openedTabs[e.activeTabIndex]);
+    let activetab = useEmitterProperty(ctx, "showTab", e => e.visibleTab);
     let selectedfile = (activetab?.type == "browse" ? activetab.id : null);
 
     let [searchtext, setSearchText] = React.useState(p.initialValue);
     let [searchmode, setSearchmode] = React.useState(p.initialMode);
 
     let canjsonsearch = overrides.jsonNameProperty != undefined;
-    let caninternalnamesearch = mode.internalNamefile != undefined;
+    let caninternalnamesearch = mode?.internalNamefile != undefined;
     const searchModes: Record<string, string> = { id: "ID" };
     if (canjsonsearch) { searchModes.objectname = "Object Name"; }
     if (caninternalnamesearch) { searchModes.internalname = "Internal Name"; }
     if (!searchModes[searchmode]) { searchmode = "id"; }
 
     let searcher = useAwaited(async () => {
+        if (!engine || !mode) { return null; }
         if (searchmode == "id") {
-            if (!engine) { return null; }
             return async (searchtext: string) => {
                 let ranges = stringToFileRange(searchtext);
                 let allfiles = (await Promise.all(ranges.map(q => mode.logicalRangeToFiles(engine, q.start, q.end))))
                     .flat()
-                    .sort((a, b) => a.index.major != b.index.major ? a.index.major - b.index.major : a.index.minor != b.index.minor ? a.index.minor - b.index.minor : a.subindex - b.subindex);
+                    .sort((a, b) => a.index.major != b.index.major ? a.index.major - b.index.major : a.index.minor != b.index.minor ? a.index.minor - b.index.minor : a.subid - b.subid);
 
                 let matches = new Map<string, string>();
                 for (let file of allfiles) {
-                    let subid = file.index.subindices[file.subindex];
-                    let filename = makeFileId(p.modename, mode.fileToLogical(engine, file.index.major, file.index.minor, subid));
+                    let filename = makeFileId(p.modename, mode.fileToLogical(engine, file.index.major, file.index.minor, file.subid));
                     matches.set(filename, filename);
                 }
                 return matches;
             }
         }
         if (searchmode == "internalname") {
-            if (!engine || mode.internalNamefile == null) { return null; }
+            if (mode.internalNamefile == null) { return null; }
             let internalnames = await engine.getInternalNameList(mode.internalNamefile);
             return (searchtext: string) => {
                 let matches = new Map<string, string>();
@@ -104,7 +107,7 @@ function AdvancedIdInputSearch(p: { modename: BrowseModes, initialValue: string,
             }
         }
         if (searchmode == "objectname") {
-            if (!engine || !overrides.jsonNameProperty) { return null; }
+            if (!overrides.jsonNameProperty) { return null; }
             if (!(p.modename in cacheFileJsonModes)) { return null; }
             let jsonsearch = await jsonCacheSearch(engine, p.modename as any);
             return (searchtext: string) => {
@@ -118,7 +121,7 @@ function AdvancedIdInputSearch(p: { modename: BrowseModes, initialValue: string,
             }
         }
         return null;
-    }, [searchmode, engine], 200);
+    }, [searchmode, engine, p.modename], 200);
 
 
     let searchresult = useAwaited(() => searcher?.(searchtext), [searchtext, searcher], 200);
@@ -135,23 +138,13 @@ function AdvancedIdInputSearch(p: { modename: BrowseModes, initialValue: string,
                 {searchmode == "id" && !searchresult && <div>Loading ids...</div>}
                 {searchmode == "internalname" && !searchresult && <div>Loading internal names...</div>}
                 {searchmode == "objectname" && !searchresult && <div>Loading object names...</div>}
-                {searchresult && <FileListView files={searchresult} selected={selectedfile} onSelect={v => { p.onFileSelect(v); p.onSearch(searchtext, searchmode); }} />}
+                {searchresult && <FileListView files={searchresult} selected={selectedfile} onSelect={(v, newtab) => { p.onFileSelect(v, newtab); p.onSearch(searchtext, searchmode); }} />}
             </div>
         </React.Fragment>
     );
 }
 
 function BrowseModeSelect(p: { mode?: string, onSelect: (mode: BrowseModes) => void }) {
-    let engine = useContext(UIEngineContext)?.sceneCache.engine;
-    let indexgraph = useAwaited(async () => {
-        if (!engine) { return null; }
-        let graph = await IndexGraphLoader.forCache(engine).load(engine);
-        return {
-            graph,
-            progress: await graph.getProgress()
-        }
-    }, [engine]);
-
     let visited: string[] = [];
     let subgroup = (groupname: string, tabids: BrowseModes[]) => {
         let tabs: Record<string, string> = {};
@@ -168,11 +161,7 @@ function BrowseModeSelect(p: { mode?: string, onSelect: (mode: BrowseModes) => v
 
     return <div className="mv-sidebar-scroll">
         <h2>Browse cache data</h2>
-        {!indexgraph && <div>Loading index state...</div>}
-        {indexgraph && <div>
-            <span>Index state: loaded {indexgraph.progress.completed} / {indexgraph.progress.total}</span>
-            <button className="sub-btn" onClick={e => indexGraphPopup(engine!)}>Open Index Graph</button>
-        </div>}
+        <GraphIndexStateView />
         {subgroup("Game", ["items", "npcs", "locs", "spotanims", "sounds", "music"])}
         {subgroup("Data", ["clientscript", "dbrows", "dbtables", "enums", "structs", "params", "achievements", "quests", "inventories"])}
         {subgroup("UI", ["interfaceviewer", "sprites", "cursors", "fontmetrics", "stylesheets", "quickchatcats", "quickchatlines"])}
@@ -182,12 +171,29 @@ function BrowseModeSelect(p: { mode?: string, onSelect: (mode: BrowseModes) => v
     </div>
 }
 
+export function GraphIndexStateView(p: {}) {
+    let engine = useContext(UIEngineContext)?.sceneCache.engine;
+    let indexgraph = useAwaited(async () => {
+        if (!engine) { return null; }
+        let graph = await IndexGraphLoader.forCache(engine).load(engine);
+        let progress = await graph.getProgress();
+        return { graph, progress };
+    }, [engine]);
+    return <>
+        {!indexgraph && <div>Loading index state...</div>}
+        {indexgraph && <div>
+            <span>Index state: loaded {indexgraph.progress.completed} / {indexgraph.progress.completed + indexgraph.progress.missingdefaults}</span>
+            <button className="sub-btn" onClick={e => indexGraphPopup(engine!)}>Open Index Graph</button>
+        </div>}
+    </>
+}
+
 export function BrowseUI(p: LookupModeProps) {
     let [id, setId] = React.useState<{ mode: string, search: string, searchmode: string } | null>(checkObject(p.initialId, { mode: "string", search: "string", searchmode: "string" }) ?? null);
     let ctx = useContext(UIRootContext);
 
-    let onFileSelect = React.useCallback((fileid: string) => {
-        ctx.openFile({ type: "browse", id: fileid });
+    let onFileSelect = React.useCallback((fileid: string, newtab: boolean) => {
+        ctx.openFile({ type: "browse", id: fileid }, newtab);
     }, [ctx]);
 
     let onSearch = (search: string, searchmode: string) => {
@@ -227,11 +233,11 @@ export async function clientScriptDeobPopup(source: CacheFileSource) {
 export async function indexGraphPopup(source: CacheFileSource) {
     let run = async (script: ScriptOutput) => {
         let graph = await IndexGraphLoader.forCache(source).load(source);
-        return graph.runIndexer(script, source, true);
+        return graph.runIndexer(script, source, true, false);
     }
 
     return scriptRunnerPopup("Cache not indexed", "Start indexing", run, <>
-        <div>Advanced features rely on indexing cache contents. This takes about 5 minutes.</div>
+        <div>Advanced features rely on indexing cache contents. This takes about 5 minutes. Afterwards the index will be stored on your browser for future use. Keep this window visible or your browser will slow down processing.</div>
     </>);
 }
 
@@ -268,71 +274,121 @@ export async function scriptRunnerPopup(title: string, runtext: string, run: (sc
     return res.promise;
 }
 
+async function jsonIdToModel(scene: ThreejsSceneCache, { mode, id }: { mode: BrowseModes | "", id: number[] }): Promise<SimpleModelInfo<any, any> | null> {
+    if (mode == "models") { return modelToModel(scene, id[0]); }
+    if (mode == "items") { return itemToModel(scene, id[0]); }
+    if (mode == "npcs") { return npcBodyToModel(scene, id[0]); }
+    if (mode == "locs") { return locToModel(scene, id[0]); }
+    if (mode == "spotanims") { return spotAnimToModel(scene, id[0]); }
+    if (mode == "materials") { return materialToModel(scene, id[0]); }
+    if (mode == "identitykit") { return identityKitToModel(scene, id[0]); }
+    return null;
+}
+
 export function BrowseDisplay(p: { browse: BrowsePageId }) {
     let ctx = useContext(UIRootContext);
-    let engine = useContext(UIEngineContext)?.sceneCache.engine;
+    let render = useContext(UIEngineContext);
+    let engine = render?.sceneCache.engine;
     let index = fileIdToIndex(p.browse.id);
 
     let data = useAwaited(() => {
-        if (!engine || !index) { return null; }
+        if (!engine || !index) {
+            return { viewer: "error", message: "No file source" } as const;
+        }
         let overrides = index && modeOverrides[index.mode];
 
         return (async () => {
-            if (index.mode == "clientscript") {
-                await clientScriptDeobPopup(engine);
-                let buf = await engine.getFileById(cacheMajors.clientscript, index.index[0]);
-                let { writer, rootfunc } = await renderClientScript(engine, buf, index.index[0], false, false, false);
-                let clicker = (objectid: string) => ctx.openFile({ type: "browse", id: objectid });
-                let dom = writer.getCodeDom(rootfunc, clicker);
-                globalThis.cs2 = rootfunc;
-                return { viewer: "dom", mode: index.mode, dom } as const;
-            }
-            if (index.mode == "sprites") {
-                let file = await engine.getFileById(cacheMajors.sprites, index.index[0]);
-                let sprite = parseSprite(file);
-                return { viewer: "sprite", mode: index.mode, sprite } as const;
-            }
-            if (index.mode == "interfaceviewer") {
-                return { viewer: "interfaces", mode: index.mode, interfaceid: index.index } as const;
-            }
-            if (index.mode == "sounds" || index.mode == "music") {
-                let major = (index.mode == "sounds" ? cacheMajors.sounds : cacheMajors.music);
-                let file = await parseMusic(engine, major, index.index[0], null, true);
-                return { viewer: "audio", mode: index.mode, file } as const;
-            }
-            if (index.mode == "coordgrid") {
+            try {
+                if (index.mode == "clientscript") {
+                    await clientScriptDeobPopup(engine);
+                    let buf = await engine.getFileById(cacheMajors.clientscript, index.index[0]);
+                    let { writer, rootfunc } = await renderClientScript(engine, buf, index.index[0], false, false, false);
+                    let dom = writer.getCodeDom(rootfunc, ctx.objectClick);
+                    globalThis.cs2 = rootfunc;
+                    return { viewer: "dom", mode: index.mode, dom } as const;
+                }
+                if (index.mode == "categories") {
+                    return {
+                        viewer: "json", mode: index.mode, file: JSON.stringify({
+                            $fileid: index.index[0],
+                            $decoder: "categories",
+                            $filename: await engine.getInternalName(internalNameFiles.category, index.index[0])
+                        })
+                    } as const;
+                }
+                if (index.mode == "sprites") {
+                    let file = await engine.getFileById(cacheMajors.sprites, index.index[0]);
+                    let sprite = parseSprite(file);
+                    return { viewer: "sprite", mode: index.mode, sprite } as const;
+                }
+                if (index.mode == "interfaceviewer" || index.mode == "components") {
+                    return { viewer: "interfaces", mode: index.mode, interfaceid: index.index } as const;
+                }
+                if (index.mode == "sounds" || index.mode == "music") {
+                    let major = (index.mode == "sounds" ? cacheMajors.sounds : cacheMajors.music);
+                    let file = await parseMusic(engine, major, index.index[0], null, true);
+                    return { viewer: "audio", mode: index.mode, file } as const;
+                }
+                if (index.mode == "coordgrid") {
+                    return {
+                        viewer: "map",
+                        level: index.index[0],
+                        x: index.index[1],
+                        z: index.index[2],
+                        markers: [{ x: index.index[1], z: index.index[2] }] as MapviewMarker[]
+                    } as const;
+                }
+
+                let jsonfn = cacheFileJsonModes[index.mode];
+                if (!jsonfn) { return null; }
+                let obj = await engine.getObject(index.mode, index.index);
                 return {
-                    viewer: "map",
-                    level: index.index[0],
-                    x: index.index[1],
-                    z: index.index[2],
-                    markers: [{ x: index.index[1], z: index.index[2] }] as MapviewMarker[]
+                    viewer: "json",
+                    mode: index.mode,
+                    file: prettyJson(obj),
                 } as const;
+            } catch (e) {
+                return { viewer: "error", message: (e as Error).message } as const;
             }
 
-            let jsonfn = cacheFileJsonModes[index.mode];
-            if (!jsonfn) { return null; }
-            let obj = await engine.getObject(index.mode, index.index);
-            return {
-                viewer: "json",
-                mode: index.mode,
-                file: prettyJson(obj),
-            } as const;
         })()
     }, [index?.mode, index?.index.join("_"), engine], 200);
+
+    let model = useAwaited(async () => {
+        if (render) {
+            let modelinfo = await jsonIdToModel(render.sceneCache, { mode: index?.mode ?? "", id: index?.index ?? [] });
+            if (modelinfo) {
+                let model = new RSModel(render.sceneCache, modelinfo.models, modelinfo.name);
+                if (modelinfo.anims.default) {
+                    model.setAnimation(modelinfo.anims.default);
+                }
+                await model.model;
+                return model;
+            }
+        }
+    }, [index?.mode, index?.index.join("_")]);
+    React.useEffect(() => {
+        if (model && render) {
+            model.addToScene(render.renderer);
+            return () => model.cleanup();
+        }
+    }, [model, render]);
 
     if (!data) { return <div>Loading...</div>; }
     if (data.viewer == "json") {
         return <JsonViewer data={data?.file} jsonmode={data?.mode ?? ""} />
     } else if (data.viewer == "dom") {
-        return <DomWrap el={data.dom} />
+        return <><DomWrap el={data.dom} /><ReferencesView browsemode={index?.mode} id={index?.index} /></>
     } else if (data.viewer == "sprite") {
-        return <TextureView img={data.sprite[0].img} fillHeight />
+        return <><TextureView img={data.sprite[0].img} fillHeight /><ReferencesView browsemode={index?.mode} id={index?.index} /></>
     } else if (data.viewer == "audio") {
-        return <BlobAudio file={data.file} autoplay />
+        return <><BlobAudio file={data.file} autoplay /><ReferencesView browsemode={index?.mode} id={index?.index} /></>
     } else if (data.viewer == "interfaces") {
         return <RsUIViewer interfaceid={data.interfaceid[0]} subcomponent={data.interfaceid[1]} />
     } else if (data.viewer == "map") {
         return <CheapMapView level={data.level} centerx={data.x} centerz={data.z} markers={data.markers} />
+    } else if (data.viewer == "error") {
+        return <div>Error: {data.message}</div>;
     }
+    return <div>Unknown viewer type</div>;
 }

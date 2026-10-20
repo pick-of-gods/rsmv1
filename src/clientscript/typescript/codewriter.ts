@@ -116,15 +116,10 @@ export class TsWriterContext {
         return parts.join("");
     }
     @boundMethod
-    getCodeDom(node: AstNode, objclick?: (objectid: string) => void) {
+    getCodeDom(node: AstNode, objclick?: (e: MouseEvent) => void) {
         let root = document.createElement("div");
         root.classList.add("mv-codeview");
-        let clickevent = (e: MouseEvent) => {
-            let obj = (e.currentTarget as HTMLElement).dataset.objectid;
-            if (obj && objclick) {
-                objclick(obj);
-            }
-        }
+        let preventmiddledrag = (e: MouseEvent) => { e.button == 1 && e.preventDefault(); };
 
         let recur = (frag: string | WriteResult, parent: DocumentFragment | HTMLElement) => {
             if (typeof frag == "string") {
@@ -134,7 +129,11 @@ export class TsWriterContext {
                 if (frag.objectid) {
                     group.classList.add(`mv-code__link`);
                     group.dataset.objectid = frag.objectid;
-                    group.addEventListener("click", clickevent);
+                    if (objclick) {
+                        group.addEventListener("click", objclick);
+                        group.addEventListener("auxclick", objclick);
+                        group.addEventListener("mousedown", preventmiddledrag);
+                    }
                 }
                 if (frag.type) {
                     group.classList.add(`mv-code__${frag.type}`);
@@ -203,7 +202,7 @@ function getOpcodeCallCode(ctx: TsWriterContext, op: ClientScriptOp, children: A
         return new WriteResult(0, [writeLeaf("keyword", "return"), " ", valueList(children.map(ctx.getCode))]);
     }
     if (op.opcode == namedClientScriptOps.gosub) {
-        return writeCall(ctx, writeLeaf("scriptname", `script${op.imm}`, `scriptref_${op.imm}`), children);
+        return writeCall(ctx, writeLeaf("scriptname", `script${op.imm}`, `clientscript_${op.imm}`), children);
     }
     let metastr = "";
     if (branchInstructionsOrJump.includes(op.opcode)) {
@@ -520,7 +519,7 @@ addWriter(ClientScriptFunction, (node, ctx) => {
 addWriter(FunctionBindNode, (node, ctx) => {
     let scriptid = node.children[0]?.knownStackDiff?.constout ?? -1;
     if (scriptid == -1 && node.children.length == 1) { return new WriteResult(19, [writeLeaf("keyword", "callback"), "()"]); }
-    let scriptnode = writeLeaf("scriptname", `script${scriptid}`, `scriptref_${scriptid}`);
+    let scriptnode = writeLeaf("scriptname", `script${scriptid}`, `clientscript_${scriptid}`);
     let children = node.children.slice(1).map(ctx.getCode);
     return new WriteResult(19, [writeLeaf("keyword", "callback"), "(", scriptnode, ...children.flatMap(q => [", ", q]), ")"]);
 });

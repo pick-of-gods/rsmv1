@@ -348,40 +348,45 @@ export type UIOpenedTab = Toplevel3DView | BrowsePageId | UIOpenedFile;
 
 export type RenderableContext = { source: CacheFileSource, sceneCache: ThreejsSceneCache, renderer: ThreeJsRenderer };
 
-export class UIContext extends TypedEmitter<{ showTab: UIOpenedTab | null, statechange: undefined }> {
+export class UIContext extends TypedEmitter<{ showTab: UIOpenedTab | null, statechange: undefined, preferencesChanged: undefined }> {
 	source: CacheFileSource | null = null;
 	sourceIdentifier: string | null = null;
 	sceneCache: ThreejsSceneCache | null = null;
-	renderer: ThreeJsRenderer | null = null;
 	openedTabs: UIOpenedTab[] = [];
-	activeTabIndex = -1;
+	visibleTab: UIOpenedTab | null = null;
 	renderable: RenderableContext | null = null;
 	rootElement: HTMLElement;
-	useServiceWorker: boolean;
+	renderer: ThreeJsRenderer;
+
+	preferences = {
+		runinterfacescripts: false,
+		splitview: false
+	}
 
 	multitab = multitabManager(this);
 
-	constructor(rootelement: HTMLElement, useServiceWorker: boolean) {
+	constructor(rootelement: HTMLElement) {
 		super();
 		this.rootElement = rootelement;
-		this.useServiceWorker = useServiceWorker;
 
-		if (useServiceWorker) {
-			//this service worker holds a reference to the cache fs handle which will keep the handles valid
-			//across tab reloads
-			// this functionality is broken since chrome no longer allows fs access on rs cache files since they are in a "system folder" (AppData)
-			// don't use webpack to bundle the service worker, it will place it in the wrong folder and its plain js anyway
-			// navigator.serviceWorker?.register("contextholder.js", { scope: './', });
-		}
+		// if (useServiceWorker) {
+		// 	this service worker holds a reference to the cache fs handle which will keep the handles valid
+		// 	across tab reloads
+		// 	this functionality is broken since chrome no longer allows fs access on rs cache files since they are in a "system folder" (AppData)
+		// 	don't use webpack to bundle the service worker, it will place it in the wrong folder and its plain js anyway
+		// 	navigator.serviceWorker?.register("contextholder.js", { scope: './', });
+		// }
 
-		navigation.addEventListener("navigate", this.onNavigate);
 		this.setStateFromUrl(new URL(document.location.href));
+
+		let cnv = document.createElement("canvas");
+		this.renderer = new ThreeJsRenderer(cnv);
 	}
 
 	close() {
 		this.source?.close();
 		this.multitab.close();
-		navigation.removeEventListener("navigate", this.onNavigate);
+		this.renderer.dispose();
 	}
 
 	@boundMethod
@@ -440,12 +445,6 @@ export class UIContext extends TypedEmitter<{ showTab: UIOpenedTab | null, state
 		}
 	}
 
-	setRenderer(renderer: ThreeJsRenderer | null) {
-		this.renderer = renderer;
-		this.emit("statechange", undefined);
-		this.fixRenderable();
-	}
-
 	canRender(): boolean {
 		return !!this.source && !!this.sceneCache && !!this.renderer;
 	}
@@ -483,7 +482,8 @@ export class UIContext extends TypedEmitter<{ showTab: UIOpenedTab | null, state
 			// return { type: "file", name: params.get("file")!, fs: null! };//data and fs will be filled in later
 		}
 		console.log(`history triggered to ${target?.type} ${(target as any)?.id}`);
-		this.openFile(target, false, true);
+		let existing = target && this.openedTabs.find(t => t.type == target.type && t.id == target.id);
+		this.openFile(existing ?? target, false, true);
 		return target;
 	}
 
@@ -501,7 +501,7 @@ export class UIContext extends TypedEmitter<{ showTab: UIOpenedTab | null, state
 
 	isNavigating = false;
 	fixUrl() {
-		let tab = (this.activeTabIndex != -1 ? this.openedTabs[this.activeTabIndex] : null);
+		let tab = this.visibleTab;
 		let now = Date.now();
 		let navigatable = true;
 		let url = new URL(document.location.href);
@@ -536,21 +536,55 @@ export class UIContext extends TypedEmitter<{ showTab: UIOpenedTab | null, state
 		}
 	}
 
+	setPreferences(prefs: Partial<typeof this.preferences>) {
+		this.preferences = { ...this.preferences, ...prefs };
+		this.emit("preferencesChanged", undefined);
+	}
+
+	@boundMethod
+	objectClick(e: React.MouseEvent<HTMLElement> | MouseEvent) {
+		e.preventDefault();
+		let fileid = (e.currentTarget as HTMLElement).dataset.objectid;
+		if (!fileid) { return; }
+		let isnewtab = e.ctrlKey || e.metaKey || e.button === 1;
+		let isleftclick = e.button == 0;
+		if (!isleftclick && !isnewtab) { return; }
+		this.openFile({ type: "browse", id: fileid }, isnewtab);
+	}
+
 	@boundMethod
 	openFile(tab: UIOpenedTab | null, newtab = false, isHistoryNavigation = false) {
-		let tabindex = this.activeTabIndex;
-		if (tabindex == -1) {
-			tabindex = 0;
+		let visibleindex = this.visibleTab ? this.openedTabs.indexOf(this.visibleTab) : -1;
+		let tabindex = tab ? this.openedTabs.indexOf(tab) : -1;
+		if (visibleindex == -1) {
 			newtab = true;
+		}
+		if (newtab) {
+			tabindex = visibleindex + 1;
 		}
 		if (tab) {
 			this.openedTabs.splice(tabindex, (newtab ? 0 : 1), tab);
 		} else {
 			this.openedTabs.splice(tabindex, 1);
 		}
-		this.activeTabIndex = tabindex;
-		this.emit("showTab", tab);
+		if (!newtab || !this.visibleTab) {
+			this.visibleTab = tab;
+		}
+		this.emit("showTab", this.visibleTab);
 		if (!isHistoryNavigation) {
+			this.fixUrl();
+		}
+	}
+
+	@boundMethod
+	closeFile(tab: UIOpenedTab) {
+		let tabindex = this.visibleTab ? this.openedTabs.indexOf(tab) : -1;
+		if (tabindex != -1) {
+			this.openedTabs.splice(tabindex, 1);
+			if (tab == this.visibleTab) {
+				this.visibleTab = this.openedTabs[tabindex] ?? this.openedTabs[tabindex - 1] ?? null;
+			}
+			this.emit("showTab", this.visibleTab);
 			this.fixUrl();
 		}
 	}
@@ -560,14 +594,14 @@ export const UIRootContext = React.createContext<UIContext>(null!);
 export const UIEngineContext = React.createContext<RenderableContext | null>(null);
 
 export function parseCacheIdentifier(cacheidentifier: string) {
-	let parts = cacheidentifier.split("-");
+	let parts = cacheidentifier.split("_");
 	let type = parts.shift()!;
 	if (type == "upload") {
-		let args = parts.join("-");
+		let args = parts.join("_");
 		if (args.match(/^\d+$/)) {
 			return { type: "blobs", version: +args } as const;
 		} else {
-			let date = new Date(args.replace(/-/g, " "));
+			let date = new Date(args.replace(/_/g, " "));
 			if (!isNaN(+date)) {
 				return { type: "blobs", version: +date / 1000 } as const;
 			}
@@ -582,7 +616,7 @@ export function parseCacheIdentifier(cacheidentifier: string) {
 		return null;
 	}
 	if (type == "fs") {
-		return { type: "fs", location: parts.join("-") } as const;
+		return { type: "fs", location: parts.join("_") } as const;
 	}
 	if (type == "live") {
 		return { type: "live" } as const;
@@ -595,20 +629,20 @@ export async function getCacheIdentifier(cache: CacheFileSource) {
 		let version = await getCacheVersionFingerprint(cache);
 		if (version > +new Date(2000, 0) / 1000) {
 			let cachedate = new Date(version * 1000);
-			let datetext = cachedate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "-");
-			return `upload-${datetext}`;
+			let datetext = cachedate.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }).replace(/ /g, "_");
+			return `upload_${datetext}`;
 		} else {
-			return `upload-${version}`;
+			return `upload_${version}`;
 		}
 	}
 	if (cache instanceof Openrs2CacheSource) {
-		return `openrs2-${cache.meta.id}`;
+		return `openrs2_${cache.meta.id}`;
 	}
 	if (cache instanceof CacheDownloader) {
 		return `live`;
 	}
 	if (cache instanceof GameCacheLoader) {
-		return `fs-${cache.cachedir}`;
+		return `fs_${cache.cachedir}`;
 	}
 	return null;
 }

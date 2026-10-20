@@ -36,7 +36,7 @@ export function addBracketsIfNeeded(slotprec: number, assoc: "left" | "right" | 
 }
 
 export function subtypeToTs(subt: number) {
-    let res = vartypeReverseMap.get(subt)
+    let res: string | undefined = vartypeReverseMap.get(subt);
     if (!res) { return `type_${subt}`; }
     // prevent conflict with ts keywords
     // if (res == "boolean") { res = "cs2bool"; }
@@ -63,13 +63,10 @@ export function writeIntObject(ctx: TsWriterContext, exacttype: number, intvalue
     }
 
     // boolean
-    if (exacttype == vartypes.boolean) {
-        if (intvalue != 0 && intvalue != 1) {
-            // something went wrong if we land here, don't hide it
-            return writeIntObject(ctx, vartypes.boolean, intvalue);
-        } else {
-            return writeLeaf("keyword", intvalue == 0 ? "false" : "true");
-        }
+    if (exacttype == vartypes.boolean && (intvalue == 0 || intvalue == 1)) {
+        // leave as a number if it is not 0 or 1
+        // this will result in bool(x) in output to show that something went wrong
+        return writeLeaf("keyword", intvalue == 0 ? "false" : "true");
     }
 
     // try find a name for this object, if it has one

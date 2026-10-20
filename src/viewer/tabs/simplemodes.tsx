@@ -1,10 +1,10 @@
-import { ThreejsSceneCache, constModelsIds } from '../../3d/modeltothree';
+import { ThreejsSceneCache, constModelsIds, getModelBoundingBox } from '../../3d/modeltothree';
 import { RGB2HSL, HSL2packHSL, ModelModifications, checkObject } from '../../utils';
-import { Euler, PerspectiveCamera, Quaternion, Vector3 } from "three";
+import { Box3, Euler, PerspectiveCamera, Quaternion, Vector3 } from "three";
 import { internalNameFiles } from "../../constants";
 import * as React from "react";
 import { ThreeJsSceneElementSource } from "../threejsrender";
-import { RenderableContext, UIEngineContext } from "../maincomponents";
+import { UIEngineContext } from "../maincomponents";
 import { showModal } from "../jsonsearch";
 import { JsonDisplay, IdInput, LabeledInput, IdInputSearch, RawTextDisplay, useForceUpdate, TextureView, DomWrap } from "../commoncontrols";
 import { items } from "../../../generated/items";
@@ -26,7 +26,9 @@ type AsyncModelData<ID, T> = [
     setter: (id: ID) => void
 ];
 
-export function useAsyncModelData<ID, T>(ctx: RenderableContext | null, getter: (cache: ThreejsSceneCache, id: ID) => Promise<SimpleModelInfo<T, ID>>) {
+
+export function useAsyncModelData<ID, T>(getter: (cache: ThreejsSceneCache, id: ID) => Promise<SimpleModelInfo<T, ID>>, hide: boolean) {
+    let ctx = React.useContext(UIEngineContext);
     let pendingId = React.useRef<ID | null>(null);
     let [loadedModel, setLoadedModel] = React.useState<RSModel | null>(null);
     let [visible, setVisible] = React.useState<SimpleModelInfo<T, ID> | null>(null);
@@ -50,8 +52,8 @@ export function useAsyncModelData<ID, T>(ctx: RenderableContext | null, getter: 
             }
         }
     }, [ctx]);
-    React.useLayoutEffect(() => {
-        if (visible && ctx) {
+    React.useEffect(() => {
+        if (visible && ctx && !hide) {
             let model = new RSModel(ctx.sceneCache, visible.models, visible.name);
             if (visible.anims.default) {
                 model.setAnimation(visible.anims.default);
@@ -66,7 +68,7 @@ export function useAsyncModelData<ID, T>(ctx: RenderableContext | null, getter: 
                 model.cleanup();
             }
         }
-    }, [visible, ctx]);
+    }, [visible, ctx, hide]);
     return [
         visible,
         loadedModel,
@@ -76,8 +78,7 @@ export function useAsyncModelData<ID, T>(ctx: RenderableContext | null, getter: 
 }
 
 export function SceneRawModel(p: LookupModeProps) {
-    let ctx = React.useContext(UIEngineContext);
-    let [data, model, id, setId] = useAsyncModelData(ctx, modelToModel);
+    let [data, model, id, setId] = useAsyncModelData(modelToModel, !p.canrender);
     let initid = (typeof p.initialId == "number" ? p.initialId : 0);
     return (
         <React.Fragment>
@@ -101,7 +102,7 @@ export function SceneRawModel(p: LookupModeProps) {
 
 export function SceneLocation(p: LookupModeProps) {
     const ctx = React.useContext(UIEngineContext);
-    const [data, model, id, setId] = useAsyncModelData(ctx, locToModel);
+    const [data, model, id, setId] = useAsyncModelData(locToModel, !p.canrender);
     const forceUpdate = useForceUpdate();
     let initid = id ?? (typeof p.initialId == "number" ? p.initialId : 0);
     return (
@@ -128,14 +129,15 @@ export function SceneLocation(p: LookupModeProps) {
     )
 }
 
-export function updateItemCamera(cam: PerspectiveCamera, imgwidth: number, imgheight: number, centery: number, params: UiCameraParams) {
-    const defaultcamdist = 16;//found through testing
-
+export function updateItemCamera(cam: PerspectiveCamera, imgwidth: number, imgheight: number, boundingbox: Box3 | null, params: UiCameraParams) {
     //fov such that the value 32 ends up in the projection matrix.yy
     //not sure if coincidence that this is equal to height
     cam.fov = Math.atan(1 / 32) / (Math.PI / 180) * 2;
     cam.aspect = imgwidth / imgheight;
     cam.updateProjectionMatrix();
+
+    let center = new Vector3();
+    boundingbox?.getCenter(center);
 
     let rot = new Quaternion().setFromEuler(new Euler(
         -params.rotx / 2048 * 2 * Math.PI,
@@ -155,11 +157,11 @@ export function updateItemCamera(cam: PerspectiveCamera, imgwidth: number, imghe
     pos.add(new Vector3(
         -params.translatex * 4,
         params.translatey * 4,
-        -params.translatey * 4//yep this is y not z, i don't fucking know
+        -params.translatez * 4
     ));
+    pos.add(center);
     pos.applyQuaternion(quaty);
     pos.applyQuaternion(quatz);
-    pos.y += centery;
     pos.divideScalar(512);
     pos.z = -pos.z;
 
@@ -176,12 +178,14 @@ export type UiCameraParams = {
     rotz: number,
     translatex: number,
     translatey: number,
+    translatez: number,
     zoom: number
 }
 
-function ItemCameraMode({ meta, centery }: { meta?: items, centery: number }) {
+function ItemCameraMode({ meta, model }: { meta?: items, model: RSModel | null }) {
     let [translatex, settranslatex] = React.useState(meta?.modelTranslate_0 ?? 0);
     let [translatey, settranslatey] = React.useState(meta?.modelTranslate_1 ?? 0);
+    let [translatez, settranslatez] = React.useState(meta?.modelTranslate_1 ?? 0);//also uses translate_1!!
     let [rotx, setrotx] = React.useState(meta?.rotation_0 ?? 0);
     let [roty, setroty] = React.useState(meta?.rotation_1 ?? 0);
     let [rotz, setrotz] = React.useState(meta?.rotation_2 ?? 0);
@@ -189,11 +193,20 @@ function ItemCameraMode({ meta, centery }: { meta?: items, centery: number }) {
     let [lastmeta, setlastmeta] = React.useState(meta);
     const imgheight = 32;
     const imgwidth = 36;
-    let params: UiCameraParams = { rotx, roty, rotz, translatex, translatey, zoom };
+    let params: UiCameraParams = {
+        rotx,
+        roty,
+        rotz,
+        translatex,
+        translatey,
+        translatez,
+        zoom
+    };
 
     let reset = () => {
         settranslatex(meta?.modelTranslate_0 ?? 0);
         settranslatey(meta?.modelTranslate_1 ?? 0);
+        settranslatez(meta?.modelTranslate_1 ?? 0);//also uses translate_1!!
         setrotx(meta?.rotation_0 ?? 0);
         setroty(meta?.rotation_1 ?? 0);
         setrotz(meta?.rotation_2 ?? 0);
@@ -205,7 +218,8 @@ function ItemCameraMode({ meta, centery }: { meta?: items, centery: number }) {
     }
 
     let ctx = React.useContext(UIEngineContext);
-    let cam = ctx && updateItemCamera(ctx.renderer.getItemCamera(), imgwidth, imgheight, centery, params);
+    let boundingbox = React.useMemo(() => getModelBoundingBox(model?.loaded?.modeldata), [model?.loaded]);
+    let cam = ctx && updateItemCamera(ctx.renderer.getItemCamera(), imgwidth, imgheight, boundingbox, params);
 
     React.useEffect(() => {
         if (!ctx) { return; }
@@ -214,7 +228,7 @@ function ItemCameraMode({ meta, centery }: { meta?: items, centery: number }) {
                 return {
                     options: {
                         camMode: "item",
-                        // aspect: imgwidth / imgheight
+                        aspect: imgwidth / imgheight
                     }
                 };
             },
@@ -234,18 +248,17 @@ function ItemCameraMode({ meta, centery }: { meta?: items, centery: number }) {
             <div><label><input type="range" value={zoom} onChange={e => setzoom(+e.currentTarget.value)} min={10} max={10000} step={1} />Zoom: {zoom}</label></div>
             <div><label><input type="range" value={translatex} onChange={e => settranslatex(+e.currentTarget.value)} min={-200} max={208} step={1} />Translate x: {translatex}</label></div>
             <div><label><input type="range" value={translatey} onChange={e => settranslatey(+e.currentTarget.value)} min={-200} max={200} step={1} />Translate y: {translatey}</label></div>
+            <div><label><input type="range" value={translatez} onChange={e => settranslatez(+e.currentTarget.value)} min={-200} max={200} step={1} />Translate z: {translatez}</label></div>
         </React.Fragment>
     )
 }
 
 export function SceneItem(p: LookupModeProps) {
     let ctx = React.useContext(UIEngineContext);
-    let [data, model, id, setId] = useAsyncModelData(ctx, itemToModel);
+    let [data, model, id, setId] = useAsyncModelData(itemToModel, !p.canrender);
     let initid = id ?? (typeof p.initialId == "number" ? p.initialId : 0);
     let [enablecam, setenablecam] = React.useState(false);
     // let [histfs, sethistfs] = React.useState<UIScriptFS | null>(null);
-
-    let centery = (model?.loaded ? (model.loaded.modeldata.maxy + model.loaded.modeldata.miny) / 2 : 0);
 
     // let gethistory = async () => {
     // 	if (id == null || !p.ctx) { return; }
@@ -265,7 +278,7 @@ export function SceneItem(p: LookupModeProps) {
             )}
             <div className="mv-sidebar-scroll">
                 <input type="button" className="sub-btn" value={enablecam ? "exit" : "Icon Camera"} onClick={e => setenablecam(!enablecam)} />
-                {enablecam && <ItemCameraMode meta={data?.info.modelitem} centery={centery} />}
+                {enablecam && p.canrender && <ItemCameraMode meta={data?.info.modelitem} model={model} />}
                 <RawTextDisplay text={data?.assetName} />
                 <StructView data={data?.info.item} meta={parse.item.parser.getJsonSchema()} />
             </div>
@@ -277,7 +290,17 @@ export function SceneItem(p: LookupModeProps) {
 
 export function SceneNpc(p: LookupModeProps) {
     const ctx = React.useContext(UIEngineContext);
-    const [data, model, id, setId] = useAsyncModelData(ctx, npcToModel);
+    const [data, model, id, setId] = useAsyncModelData(npcToModel, !p.canrender);
+    // useEffect(() => {
+    //     if (ctx && id?.head) {
+    //         let el = {
+    //             getSceneElements() { return { options: { hideFloor: true } } }
+    //         };
+    //         ctx.renderer.addSceneElement(el);
+    //         return () => ctx.renderer.removeSceneElement(el);
+    //     }
+    // }, [ctx, id?.head]);
+
     const forceUpdate = useForceUpdate();
     const initid = id ?? checkObject(p.initialId, { id: "number", head: "boolean" }) ?? { id: 0, head: false };
 
@@ -304,8 +327,7 @@ export function SceneNpc(p: LookupModeProps) {
 }
 
 export function SceneSpotAnim(p: LookupModeProps) {
-    let ctx = React.useContext(UIEngineContext);
-    let [data, model, id, setId] = useAsyncModelData(ctx, spotAnimToModel);
+    let [data, model, id, setId] = useAsyncModelData(spotAnimToModel, !p.canrender);
     let initid = id ?? (typeof p.initialId == "number" ? p.initialId : 0);
     return (
         <React.Fragment>
@@ -387,7 +409,7 @@ async function materialIshToModel(sceneCache: ThreejsSceneCache, reqid: Material
 
 export function SceneMaterialIsh(p: LookupModeProps) {
     let ctx = React.useContext(UIEngineContext);
-    let [data, model, id, setId] = useAsyncModelData(ctx, materialIshToModel);
+    let [data, model, id, setId] = useAsyncModelData(materialIshToModel, !p.canrender);
 
     let initid = id ?? checkObject(p.initialId, { mode: "string", id: "number" }) as MaterialIshId ?? { mode: "material", id: 0 };
     let modechange = (v: React.FormEvent<HTMLInputElement>) => setId({ mode: v.currentTarget.value as any, id: initid.id });

@@ -11,7 +11,7 @@ import { runMapRender } from "../../map";
 import { diffCaches, FileEdit } from "../../scripts/cachediff";
 import { showModal } from "../jsonsearch";
 import { InputCommitted, LabeledInput, TabStrip } from "../commoncontrols";
-import { cacheFileJsonModes, FileParser } from '../../parser/jsondecoders';
+import { cacheFileExperimentalModes, cacheFileJsonModes, FileParser } from '../../parser/jsondecoders';
 import { fileHistory } from '../../scripts/filehistory';
 import { extractCacheFiles } from '../../scripts/extractfiles';
 import { MapRenderFsBacked, examplemapconfig, parseMapConfig } from '../../map/backends';
@@ -175,20 +175,22 @@ function MaprenderScript(p: UiScriptProps) {
 
 function ReferenceGraphScript(p: UiScriptProps) {
     let ctx = React.useContext(UIRootContext);
-    let [mode, setMode] = React.useState<"full" | "core">("core");
+    let [includeexpensive, setIncludeexpensive] = React.useState(false);
+    let [includeclientscripts, setIncludeclientscripts] = React.useState(false);
 
     let run = async () => {
         if (!ctx.source) { return; }
         let output = new UIScriptOutput();
         p.onRun(output, "");
         let graph = await IndexGraphLoader.forCache(ctx.source).load(ctx.source);
-        let res = await output.run(graph.runIndexer,  ctx.source, mode == "full");
+        let res = await output.run(graph.runIndexer, ctx.source, includeclientscripts, includeexpensive);
     }
 
     return (
         <React.Fragment>
             <p>Indexes all references in the cache for later use.</p>
-            <TabStrip value={mode} tabs={{ core: "Core", full: "Full" }} onChange={v => setMode(v)} />
+            <input type="checkbox" checked={includeclientscripts} onChange={e => setIncludeclientscripts(e.currentTarget.checked)} />Include client scripts<br />
+            <input type="checkbox" checked={includeexpensive} onChange={e => setIncludeexpensive(e.currentTarget.checked)} />Include expensive modes (models, maps, etc)<br />
             <input type="button" className="sub-btn" value="Run" disabled={!ctx.source} onClick={run} />
         </React.Fragment>
     )
@@ -319,6 +321,11 @@ function DependencyDiffScript(p: UiScriptProps) {
     )
 }
 
+const testableJsonModes = {
+    ...cacheFileJsonModes,
+    ...cacheFileExperimentalModes
+}
+
 function TestFilesScript(p: UiScriptProps) {
     let ctx = React.useContext(UIRootContext);
     let [initmode, initrange, initdumpall, initordersize] = p.initialArgs.split(":") as (string | undefined)[];
@@ -329,7 +336,7 @@ function TestFilesScript(p: UiScriptProps) {
     let [customparser, setCustomparser] = React.useState("");
 
     let run = () => {
-        let modeobj = cacheFileJsonModes[mode as keyof typeof cacheFileJsonModes];
+        let modeobj = testableJsonModes[mode as keyof typeof testableJsonModes];
         if (!modeobj || !ctx.source) { return; }
         let output = new UIScriptOutput();
         let outdir = output.makefs("output")
@@ -346,7 +353,7 @@ function TestFilesScript(p: UiScriptProps) {
     }
 
     let customparserUi = React.useCallback(() => {
-        let srctext = customparser || cacheFileJsonModes[mode as keyof typeof cacheFileJsonModes].parser.originalSource;
+        let srctext = customparser || testableJsonModes[mode as keyof typeof testableJsonModes].parser.originalSource;
         let modal = showModal({ title: "Edit parser" }, (
             <form style={{ display: "flex", flexDirection: "column", height: "100%" }}>
                 <textarea name="parsertext" defaultValue={srctext} style={{ flex: "1000px 1 1", resize: "none", whiteSpace: "nowrap" }} />
@@ -361,13 +368,13 @@ function TestFilesScript(p: UiScriptProps) {
             <p>Run this script to test if the current cache parser is compatible with the loaded cache. Generates readable errors if not.</p>
             <LabeledInput label="Mode">
                 <select value={mode} onChange={e => setMode(e.currentTarget.value)}>
-                    {Object.keys(cacheFileJsonModes).map(k => <option key={k} value={k}>{k}</option>)}
+                    {Object.keys(testableJsonModes).map(k => <option key={k} value={k}>{k}</option>)}
                 </select>
             </LabeledInput>
             <LabeledInput label="file range">
                 <input type="text" onChange={e => setRange(e.currentTarget.value)} value={range} />
             </LabeledInput>
-            <div><label><input type="checkbox" checked={ordersize} onChange={e => setOrdersize(e.currentTarget.checked)} />Order by size (puts everything in mem)</label></div>
+            <div><label><input type="checkbox" checked={ordersize} onChange={e => setOrdersize(e.currentTarget.checked)} />Order by size (stores everything in mem)</label></div>
             <div><label><input type="checkbox" checked={dumpall} onChange={e => setDumpall(e.currentTarget.checked)} />Output successes as well</label></div>
             <br />
             <input type="button" className="sub-btn" value="Edit parser" onClick={customparserUi} />
@@ -399,7 +406,10 @@ function RawCliScript(p: UiScriptProps) {
             output.setState(res._tag == "error" ? "error" : "done");
         }
         if (res._tag == "error") {
-            output.log(res.error.config.message);
+            let err = res.error.config.message;
+            // Remove ANSI escape codes from the error message
+            let cleanText = err.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
+            output.log(cleanText);
         } else {
             output.log("script done");
         }
@@ -416,8 +426,8 @@ function RawCliScript(p: UiScriptProps) {
 
 type UiScriptProps = { onRun: (output: UIScriptOutput, args: string) => void, initialArgs: string };
 const uiScripts: Record<string, React.ComponentType<UiScriptProps>> = {
-    test: TestFilesScript,
     extract: ExtractFilesScript,
+    test: TestFilesScript,
     preview: PreviewFilesScript,
     historic: ExtractHistoricScript,
     maprender: MaprenderScript,
@@ -429,7 +439,7 @@ const uiScripts: Record<string, React.ComponentType<UiScriptProps>> = {
 
 export function ScriptsUI(p: LookupModeProps) {
     let ctx = React.useContext(UIRootContext);
-    let initialscript = "test";
+    let initialscript = "extract";
     let initialargs = "";
     if (typeof p.initialId == "string") {
         [initialscript, initialargs] = p.initialId.split(/(?<=^[^:]*):/);

@@ -1,6 +1,6 @@
 
-import { cacheConfigPages, cacheMajors, internalNameFiles } from "../constants";
-import { parse, FileParser, JsonBasedFile, cacheFileJsonModes } from "./jsondecoders";
+import { cacheConfigPages, cacheMajors, internalNameFiles, JsonFieldTypes } from "../constants";
+import { parse, FileParser, JsonBasedFile, cacheFileJsonModes, cacheFileExperimentalModes } from "./jsondecoders";
 import { CacheFileSource } from "../cache";
 import { constrainedMap } from "../utils";
 import prettyJson from "json-stringify-pretty-compact";
@@ -26,6 +26,7 @@ export type DecodeModeFactory<T = Buffer | string, CTX = any> = (flags: Record<s
 export type DecodeMode<T = Buffer | string, CTX = void> = {
 	ext: string,
 	parser?: FileParser<any>,
+	rstype?: JsonFieldTypes,
 	read(buf: Buffer, fileid: LogicalIndex, source: CacheFileSource, ctx: CTX | undefined): T | Promise<T>,
 	prepareDump(output: ScriptFS, source: CacheFileSource): Promise<CTX> | CTX,
 	prepareWrite(source: CacheFileSource): Promise<void> | void,
@@ -43,7 +44,7 @@ const throwOnNonSimple = {
 }
 
 
-function standardFile(mode: JsonBasedFile<any>, decodername: string): DecodeModeFactory {
+function standardFile(mode: JsonBasedFile<any>, decodername: string, rstype?: JsonFieldTypes): DecodeModeFactory {
 	let constr = ((args: Record<string, string>) => {
 		let singleschemaurl = "";
 		let batchschemaurl = "";
@@ -51,6 +52,7 @@ function standardFile(mode: JsonBasedFile<any>, decodername: string): DecodeMode
 			ext: "json",
 			...mode.lookup,
 			parser: mode.parser,
+			rstype: rstype,
 			async prepareDump(output, source) {
 				let name = Object.entries(cacheFileDecodeModes).find(q => q[1] == constr);
 				if (!name) { throw new Error(); }
@@ -139,14 +141,14 @@ const decodeMusic: DecodeModeFactory = () => {
 			if (namefile.size != 0) {
 				return [...namefile.keys()]
 					.filter(q => q >= start[0] && q <= end[0])
-					.map<CacheFileId>(q => ({ index: indexfile[q], subindex: 0 }));
+					.map<CacheFileId>(q => ({ index: indexfile[q], subid: 0 }));
 			} else {
 				let enumdata = await source.getObject("enums", 1351);
 				return enumdata.intArrayValue2!.values
 					.filter(q => q[1] >= start[0] && q[1] <= end[0])
 					.sort((a, b) => a[1] - b[1])
 					.filter((q, i, arr) => i == 0 || arr[i - 1][1] != q[1])//filter duplicates
-					.map<CacheFileId>(q => ({ index: indexfile[q[1]], subindex: 0 }))
+					.map<CacheFileId>(q => ({ index: indexfile[q[1]], subid: 0 }))
 			}
 		},
 		...throwOnNonSimple,
@@ -187,7 +189,7 @@ const decodeSlideshow: DecodeModeFactory = () => {
 				let dbrow = parse.dbrows.read(subfile.buffer, source);
 				if (dbrow.table == 40) { ids.push(subfile.fileid); }
 			}
-			return ids.map(q => ({ index: indexfile[cacheConfigPages.dbrows], subindex: q }));
+			return ids.map(q => ({ index: indexfile[cacheConfigPages.dbrows], subid: q }));
 		},
 		...throwOnNonSimple,
 		async read(buf, fileid, source) {
@@ -215,16 +217,16 @@ const decodeCutscene: DecodeModeFactory = () => {
 const decodeInterface: DecodeModeFactory = () => {
 	return {
 		ext: "html",
-		major: cacheMajors.interfaces,
+		major: cacheMajors.components,
 		minor: undefined,
 		logicalDimensions: 1,
 		usesArchieves: true,
 		internalNamefile: internalNameFiles.interface,
 		fileToLogical(source, major, minor, subfile) { if (subfile != 0) { throw new Error("subfile 0 expected") } return [minor]; },
-		logicalToFile(source, id) { return { major: cacheMajors.interfaces, minor: id[0], subid: 0 }; },
+		logicalToFile(source, id) { return { major: cacheMajors.components, minor: id[0], subid: 0 }; },
 		async logicalRangeToFiles(source, start, end) {
-			let indexfile = await source.getCacheIndex(cacheMajors.interfaces);
-			return indexfile.filter(q => q && q.minor >= start[0] && q.minor <= end[0]).map(q => ({ index: q, subindex: 0 }));
+			let indexfile = await source.getCacheIndex(cacheMajors.components);
+			return indexfile.filter(q => q && q.minor >= start[0] && q.minor <= end[0]).map(q => ({ index: q, subid: 0 }));
 		},
 		...throwOnNonSimple,
 		async read(buf, fileid, source) {
@@ -237,16 +239,16 @@ const decodeInterface: DecodeModeFactory = () => {
 const decodeInterface2: DecodeModeFactory = () => {
 	return {
 		ext: "ui.json",
-		major: cacheMajors.interfaces,
+		major: cacheMajors.components,
 		minor: undefined,
 		logicalDimensions: 1,
 		usesArchieves: true,
 		internalNamefile: internalNameFiles.interface,
 		fileToLogical(source, major, minor, subfile) { if (subfile != 0) { throw new Error("subfile 0 expected") } return [minor]; },
-		logicalToFile(source, id) { return { major: cacheMajors.interfaces, minor: id[0], subid: 0 }; },
+		logicalToFile(source, id) { return { major: cacheMajors.components, minor: id[0], subid: 0 }; },
 		async logicalRangeToFiles(source, start, end) {
-			let indexfile = await source.getCacheIndex(cacheMajors.interfaces);
-			return indexfile.filter(q => q && q.minor >= start[0] && q.minor <= end[0]).map(q => ({ index: q, subindex: 0 }));
+			let indexfile = await source.getCacheIndex(cacheMajors.components);
+			return indexfile.filter(q => q && q.minor >= start[0] && q.minor <= end[0]).map(q => ({ index: q, subid: 0 }));
 		},
 		...throwOnNonSimple,
 		async read(buf, fileid, source) {
@@ -490,7 +492,10 @@ const cacheFileDecodersOther = constrainedMap<DecodeModeFactory>()({
 });
 
 const cacheFileDecodersJson = (Object.fromEntries(Object.entries(cacheFileJsonModes)
-	.map(([k, v]) => [k, standardFile(v as JsonBasedFile<any>, k)])) as Record<keyof typeof cacheFileJsonModes, DecodeModeFactory>)
+	.map(([k, v]) => [k, standardFile(v as JsonBasedFile<any>, k, v.proptype)])) as Record<keyof typeof cacheFileJsonModes, DecodeModeFactory>)
+
+const cacheFileDecodersExperimentalJson = (Object.fromEntries(Object.entries(cacheFileExperimentalModes)
+	.map(([k, v]) => [k, standardFile(v as JsonBasedFile<any>, k, v.proptype)])) as Record<keyof typeof cacheFileExperimentalModes, DecodeModeFactory>)
 
 export const cacheFileDecodeGroups = {
 	image: cacheFileDecodersImage,
@@ -499,6 +504,7 @@ export const cacheFileDecodeGroups = {
 	sound: cacheFileDecodersSound,
 	other: cacheFileDecodersOther,
 	json: cacheFileDecodersJson,
+	experimental: cacheFileDecodersExperimentalJson,
 }
 
 export const cacheFileDecodeModes = Object.fromEntries(Object.values(cacheFileDecodeGroups).flatMap(q => Object.entries(q)))

@@ -1,6 +1,6 @@
 import { lastLegacyBuildnr } from "../constants";
 import type * as jsonschema from "json-schema";
-import { ClientScriptDeobLoader } from "../clientscript";
+import type { ClientScriptDeobLoader } from "../clientscript";
 
 export type TypeDef = { [name: string]: unknown };
 
@@ -319,114 +319,117 @@ function refgetter(refparent: ChunkParentCallback | null, propname: string, reso
 	}
 }
 
-function structParser(args: unknown[], parent: ChunkParentCallback, typedef: TypeDef) {
-	let refs: Record<string, ResolvedReference[] | undefined> = {};
-	let r: ChunkParser = {
-		read(state) {
-			let r = {};
-			let hidden = {};
-			state.stack.push(r);
-			state.hiddenstack.push(hidden);
-			if (debugdata && !debugdata.rootstate) { debugdata.rootstate = r; }
-			for (let key of keys) {
-				if (debugdata) { debugdata.opcodes.push({ op: key, index: state.scan, stacksize: state.stack.length }); }
-				let v = props[key].read(state);
-				if (v !== undefined) {
-					if (key[0] == "$") {
-						hidden[key] = v;
-					} else {
-						r[key] = v;
-					}
-				}
-			}
-			state.stack.pop();
-			state.hiddenstack.pop();
-			return r;
-		},
-		write(state, value) {
-			if (typeof value != "object" || !value) { throw new Error("object expected"); }
-			let hiddenvalue = {};
-			state.stack.push(value);
-			state.hiddenstack.push(hiddenvalue);
-			for (let key of keys) {
-				let propvalue = value[key as string];
-				let prop = props[key];
-
-				if (key.startsWith("$")) {
-					if (prop.readConst != undefined) {
-						propvalue = prop.readConst(state);
-					} else {
-						let refarray = refs[key];
-						if (!refarray) { throw new Error("cannot write hidden values if they are not constant or not referenced"); }
-						propvalue ??= 0;
-						for (let ref of refarray) {
-							propvalue = ref.resolve(value, propvalue);
+function structParserFactory(ismini: boolean) {
+	return function structParser(args: unknown[], parent: ChunkParentCallback, typedef: TypeDef) {
+		let refs: Record<string, ResolvedReference[] | undefined> = {};
+		let r: ChunkParser = {
+			read(state) {
+				let r = {};
+				let hidden = {};
+				state.stack.push(r);
+				state.hiddenstack.push(hidden);
+				if (debugdata && !debugdata.rootstate) { debugdata.rootstate = r; }
+				if (debugdata && ismini) { debugdata.opcodes.push({ op: "struct", index: state.scan, stacksize: state.stack.length }); }
+				for (let key of keys) {
+					if (debugdata && !ismini) { debugdata.opcodes.push({ op: key, index: state.scan, stacksize: state.stack.length }); }
+					let v = props[key].read(state);
+					if (v !== undefined) {
+						if (key[0] == "$") {
+							hidden[key] = v;
+						} else {
+							r[key] = v;
 						}
 					}
-					hiddenvalue[key] = propvalue;
 				}
-				prop.write(state, propvalue);
-			}
-			state.stack.pop();
-			state.hiddenstack.pop();
-		},
-		getTypescriptType(indent) {
-			let r = "{\n";
-			let newindent = indent + "\t";
-			for (let key of keys) {
-				if (key[0] == "$") { continue; }
-				r += newindent + key + ": " + props[key].getTypescriptType(newindent) + ",\n";
-			}
-			r += indent + "}";
-			return r;
-		},
-		getJsonSchema() {
-			let propschema: Record<string, jsonschema.JSONSchema6Definition> = {};
-			for (let prop in props) {
-				if (prop.startsWith("$")) { continue; }
-				propschema[prop] = (props[prop] as ChunkParser).getJsonSchema();
-				let proptype = proptypes[prop];
-				if (proptype) {
-					propschema[prop]["x-rsmv-type"] = proptype;
+				state.stack.pop();
+				state.hiddenstack.pop();
+				return r;
+			},
+			write(state, value) {
+				if (typeof value != "object" || !value) { throw new Error("object expected"); }
+				let hiddenvalue = {};
+				state.stack.push(value);
+				state.hiddenstack.push(hiddenvalue);
+				for (let key of keys) {
+					let propvalue = value[key as string];
+					let prop = props[key];
+
+					if (key.startsWith("$")) {
+						if (prop.readConst != undefined) {
+							propvalue = prop.readConst(state);
+						} else {
+							let refarray = refs[key];
+							if (!refarray) { throw new Error("cannot write hidden values if they are not constant or not referenced"); }
+							propvalue ??= 0;
+							for (let ref of refarray) {
+								propvalue = ref.resolve(value, propvalue);
+							}
+						}
+						hiddenvalue[key] = propvalue;
+					}
+					prop.write(state, propvalue);
 				}
-			}
-			return {
-				type: "object",
-				properties: propschema,
-				required: Object.keys(propschema)
+				state.stack.pop();
+				state.hiddenstack.pop();
+			},
+			getTypescriptType(indent) {
+				let r = "{\n";
+				let newindent = indent + "\t";
+				for (let key of keys) {
+					if (key[0] == "$") { continue; }
+					r += newindent + key + ": " + props[key].getTypescriptType(newindent) + ",\n";
+				}
+				r += indent + "}";
+				return r;
+			},
+			getJsonSchema() {
+				let propschema: Record<string, jsonschema.JSONSchema6Definition> = {};
+				for (let prop in props) {
+					if (prop.startsWith("$")) { continue; }
+					propschema[prop] = (props[prop] as ChunkParser).getJsonSchema();
+					let proptype = proptypes[prop];
+					if (proptype) {
+						propschema[prop]["x-rsmv-type"] = proptype;
+					}
+				}
+				return {
+					type: "object",
+					properties: propschema,
+					required: Object.keys(propschema)
+				}
 			}
 		}
-	}
 
-	let resolveReference = function (targetprop: string, name: string, childresolve: ResolvedReference) {
-		let result: ResolvedReference = {
-			stackdepth: childresolve.stackdepth + 1,
-			resolve(v, oldvalue) {
-				if (typeof v != "object" || !v) { throw new Error("object expected"); }
-				let res = v[targetprop!];
-				return childresolve.resolve(res, oldvalue);
+		let resolveReference = function (targetprop: string, name: string, childresolve: ResolvedReference) {
+			let result: ResolvedReference = {
+				stackdepth: childresolve.stackdepth + 1,
+				resolve(v, oldvalue) {
+					if (typeof v != "object" || !v) { throw new Error("object expected"); }
+					let res = v[targetprop!];
+					return childresolve.resolve(res, oldvalue);
+				}
+			};
+			if (Object.prototype.hasOwnProperty.call(props, name)) {
+				refs[name] ??= [];
+				refs[name]!.push(result);
+				return result;
+			} else {
+				return buildReference(name, parent, result);
 			}
-		};
-		if (Object.prototype.hasOwnProperty.call(props, name)) {
-			refs[name] ??= [];
-			refs[name]!.push(result);
-			return result;
-		} else {
-			return buildReference(name, parent, result);
 		}
-	}
 
-	let props = {};
-	let proptypes = {};
-	for (let propdef of args) {
-		if (!Array.isArray(propdef) || (propdef.length != 2 && propdef.length != 3)) { throw new Error("each struct args should be a [name,type] pair"); }
-		if (typeof propdef[0] != "string") { throw new Error("prop name should be string"); }
-		if (props[propdef[0]]) { throw new Error("duplicate struct prop " + propdef[0]); }
-		props[propdef[0]] = buildParser(resolveReference.bind(null, propdef[0]), propdef[1], typedef);
-		proptypes[propdef[0]] = propdef[2] ?? "";
+		let props = {};
+		let proptypes = {};
+		for (let propdef of args) {
+			if (!Array.isArray(propdef) || (propdef.length != 2 && propdef.length != 3)) { throw new Error("each struct args should be a [name,type] pair"); }
+			if (typeof propdef[0] != "string") { throw new Error("prop name should be string"); }
+			if (props[propdef[0]]) { throw new Error("duplicate struct prop " + propdef[0]); }
+			props[propdef[0]] = buildParser(resolveReference.bind(null, propdef[0]), propdef[1], typedef);
+			proptypes[propdef[0]] = propdef[2] ?? "";
+		}
+		let keys = Object.keys(props);
+		return r;
 	}
-	let keys = Object.keys(props);
-	return r;
 }
 
 function optParser(args: unknown[], parent: ChunkParentCallback, typedef: TypeDef) {
@@ -1419,26 +1422,24 @@ const hardcodes: Record<string, (args: unknown[], parent: ChunkParentCallback, t
 			},
 		}
 	},
-	"flipped varushort": function (args, parent, typedef) {
-		// same as varushort, but flips bytes for some reason
-		// idk why this exists, but its used by dbrows table id field
-		// TODO i remember this existing in skeletal anims as well, merge implementations
+	varushortbias: function () {
 		return {
-			read(state) {
-				let byte0 = state.buffer.readUint8(state.scan++);
-				if ((byte0 & 0x80) == 0) {
-					return byte0;
+			read(s) {
+				let firstByte = s.buffer.readUInt8(s.scan++);
+				if ((firstByte & 0x80) == 0) {
+					return firstByte - 0x40;
 				}
-				let byte1 = state.buffer.readUint8(state.scan++);
-				return (byte1 << 7) | (byte0 & 0x7f);
+				let secondByte = s.buffer.readUInt8(s.scan++);
+				return (((firstByte & 0x7f) << 8) | secondByte) - 0x4000;
 			},
-			write(state, v) {
+			write(s, v) {
 				if (typeof v != "number") { throw new Error("number expected"); }
-				if (v < 0x80) {
-					state.buffer.writeUint8(v, state.scan++);
+				if (v < 0x40 && v >= -0x40) {
+					s.buffer.writeUInt8(v + 0x40, s.scan);
+					s.scan += 1;
 				} else {
-					state.buffer.writeUint8((v & 0x7f) | 0x80, state.scan++);
-					state.buffer.writeUint8(v >> 7, state.scan++);
+					s.buffer.writeInt16BE((v | 0x8000) + 0x4000, s.scan);
+					s.scan += 2;
 				}
 			},
 			getTypescriptType(indent) {
@@ -1447,7 +1448,7 @@ const hardcodes: Record<string, (args: unknown[], parent: ChunkParentCallback, t
 			getJsonSchema() {
 				return { type: "number" };
 			}
-		}
+		};
 	},
 	"tailed varushort": function (args, parent, typedef) {
 		const overflowchunk = 0x7fff;
@@ -1547,10 +1548,14 @@ const hardcodes: Record<string, (args: unknown[], parent: ChunkParentCallback, t
 				if (debugdata) {
 					debugdata.opcodes.push({ op: "opcode", index: state.scan, stacksize: state.stack.length + 1 });
 				}
-				return ClientScriptDeobLoader.forCacheArgsOrThrow(state.args).readOpcode(state);
+				let deob = state.args.clientScriptDeob as ClientScriptDeobLoader | undefined;
+				if (!deob || !deob.loaded) { throw new Error("clientScriptDeob not set in args"); }
+				return deob.loaded.readOpcode(state);
 			},
 			write(state, v) {
-				ClientScriptDeobLoader.forCacheArgsOrThrow(state.args).writeOpCode(state, v);
+				let deob = state.args.clientScriptDeob as ClientScriptDeobLoader | undefined;
+				if (!deob || !deob.loaded) { throw new Error("clientScriptDeob not set in args"); }
+				deob.loaded.writeOpCode(state, v);
 			},
 			getJsonSchema() {
 				return {
@@ -1697,35 +1702,6 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 		},
 		min: 0, max: 2 ** 31 - 1
 	},
-	varnullint: {
-		read(s) {
-			let firstWord = s.buffer.readUInt16BE(s.scan);
-			s.scan += 2;
-			if (firstWord == 0x7fff) {
-				return -1;
-			} else if ((firstWord & 0x8000) == 0) {
-				return firstWord;
-			} else {
-				let secondWord = s.buffer.readUInt16BE(s.scan);
-				s.scan += 2;
-				return ((firstWord & 0x7fff) << 16) | secondWord;
-			}
-		},
-		write(s, v) {
-			if (v == -1) {
-				s.buffer.writeUint16BE(0x7fff, s.scan);
-				s.scan += 2;
-			} else if (v < 0x8000) {
-				s.buffer.writeUInt16BE(v, s.scan);
-				s.scan += 2;
-			} else {
-				//unsigned right shift to cast to uint32 again
-				s.buffer.writeUint32BE((v | 0x80000000) >>> 0, s.scan);
-				s.scan += 4;
-			}
-		},
-		min: -1, max: 2 ** 31 - 1
-	},
 	varint: {
 		read(s) {
 			let firstWord = s.buffer.readUInt16BE(s.scan);
@@ -1749,6 +1725,35 @@ const numberTypes: Record<string, { read: (s: DecodeState) => number, write: (s:
 			}
 		},
 		min: -(2 ** 30), max: 2 ** 30 - 1
+	},
+	// newer encoding that can fit any uint and stores it in 1-5 bytes
+	denseuint: {
+		read(state) {
+			let value = 0;
+			let bitcount = 0;
+			while (true) {
+				let byte = state.buffer.readUint8(state.scan++);
+				value |= (byte & 0x7f) << bitcount;
+				bitcount += 7;
+				if ((byte & 0x80) == 0) {
+					break;
+				}
+			}
+			return value;
+		},
+		write(state, v) {
+			if (typeof v != "number") { throw new Error("number expected"); }
+			let value = v;
+			while (value) {
+				let byte = value & 0x7f;
+				value >>= 7;
+				if (value) {
+					byte |= 0x80;
+				}
+				state.buffer.writeUint8(byte, state.scan++);
+			}
+		},
+		min: 0, max: 2 ** 32 - 1
 	}
 }
 
@@ -1796,7 +1801,8 @@ const parserFunctions = {
 	buffer: bufferParser,
 	nullarray: arrayNullTerminatedParser,
 	array: arrayParser,
-	struct: structParser,
+	struct: structParserFactory(false),
+	ministruct: structParserFactory(true),
 	tuple: tupleParserFactory(false),
 	typedtuple: tupleParserFactory(true),
 	typed: typedParser,

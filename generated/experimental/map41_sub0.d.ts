@@ -1,0 +1,198 @@
+// GENERATED DO NOT EDIT
+// This source data is located at '..\..\src\opcodes\experimental\map41_sub0.jsonc'
+// run `npm run filetypes` to rebuild
+
+export type map41_sub0 = {
+	underlays: number[],
+	overlays: number[],
+	data: {
+		chunksize: (64|8),
+		x: number,
+		z: number,
+		subx: (number|0),
+		subz: (number|0),
+		level: (number|0),
+		unkheader: Uint8Array | null,
+		tiles: {
+			v: {
+				v: ([
+						number,
+						number,
+						number,
+					]|[
+						number,
+						number,
+					]|[
+						number,
+						number,
+						number,
+					]|[
+						number,
+						number,
+						number,
+					]|[
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+					]|[
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+					]|[
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+						number,
+					]|[
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+					]|[
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+						number,
+						number,
+						number,
+						[
+							number,
+							number,
+						][],
+					]|number|[
+						number,
+						number,
+					]|number|number|Uint8Array|number),
+			}[],
+		}[],
+	}[],
+};

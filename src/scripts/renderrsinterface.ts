@@ -1,17 +1,16 @@
 import { interfaces } from "../../generated/interfaces";
-import { EngineCache, ThreejsSceneCache } from "../3d/modeltothree";
+import { ThreejsSceneCache } from "../3d/modeltothree";
 import { RSModel } from "../3d/scene/model";
 import { expandSprite, parseSprite } from "../3d/materials/sprite";
 import { CacheFileSource } from "../cache";
-import { ClientScriptDeobLoader } from "../clientscript";
 import { ClientScriptInterpreter } from "../clientscript/interpreter";
 import { cacheMajors } from "../constants";
-import { makeImageData, pixelsToDataUrl } from "../imgutils";
+import { pixelsToDataUrl } from "../imgutils";
 import { parse } from "../parser/jsondecoders";
 import { escapeHTML, packComponent, rsmarkupToSafeHtml, TypedEmitter } from "../utils";
 import { ThreeJsRenderer } from "../viewer/threejsrender";
 import { UiCameraParams } from "../viewer/tabs/simplemodes";
-import { clientScriptDeobPopup } from "../viewer/tabs/browse";
+import { ClientscriptObfuscation } from "../clientscript/callibration/callibrator";
 
 
 export const MAGIC_CONST_MOUSE_X = 0x80000001 | 0;
@@ -19,7 +18,7 @@ export const MAGIC_CONST_MOUSE_Y = 0x80000002 | 0;
 export const MAGIC_CONST_CURRENTCOMP = 0x80000003 | 0;
 export const MAGIC_CONST_OPNR = 0x80000004 | 0;
 export const MAGIC_CONST_IF_AS_CC = 0x80000005 | 0;
-export const MAGIC_UNK06 = 0x80000006 | 0;
+export const MAGIC_CONST_MOUSE_DRAG_ICON = 0x80000006 | 0;//might be hardcoded reference to a mouse drag icon component
 
 // map props defined in stylesheets cache
 export const styleSheetImageProps = [
@@ -88,6 +87,15 @@ export const styleSheetRGBAProps = [
     0xee712164
 ];
 
+export const componentTypeNames: Record<number, string> = {
+    0: "container",
+    3: "box",
+    4: "text",
+    5: "sprite",
+    6: "model",
+    9: "line"
+}
+
 type HTMLResult = string;
 export type RsInterfaceDomTree = {
     el: HTMLDivElement;
@@ -106,7 +114,7 @@ export class UiRenderContext extends TypedEmitter<{ hover: RsInterfaceComponent 
     highlightstack: HTMLElement[] = [];
     interpreter: ClientScriptInterpreter | null = null;
     touchedComps = new Set<RsInterfaceComponent>();
-    runOnloadScripts = false;
+    scriptdeob: ClientscriptObfuscation | null = null;
     constructor(source: CacheFileSource) {
         super();
         this.source = source;
@@ -131,13 +139,21 @@ export class UiRenderContext extends TypedEmitter<{ hover: RsInterfaceComponent 
             }
         }
     }
-    async runClientScriptCallback(compid: number, cbdata: (number | string)[]) {
+    async runClientScriptCallback(deob: ClientscriptObfuscation, compid: number, cbdata: (number | string)[]) {
         if (cbdata.length == 0) { return; }
-        this.interpreter ??= new ClientScriptInterpreter(ClientScriptDeobLoader.forCache(this.source).getOrThrow(), this);
+        this.interpreter ??= new ClientScriptInterpreter(deob, this);
         if (typeof cbdata[0] != "number") { throw new Error("expected callback script id but got string"); }
 
         this.interpreter.reset();//TODO warn if this actually does anything?
-        this.interpreter.pushlist(cbdata.slice(1));
+        this.interpreter.pushlist(cbdata.slice(1).map(v => {
+            if (typeof v == "number" && v == MAGIC_CONST_CURRENTCOMP) { return compid; }
+            if (typeof v == "number" && v == MAGIC_CONST_OPNR) { return 0; }
+            if (typeof v == "number" && v == MAGIC_CONST_MOUSE_X) { return 0; }
+            if (typeof v == "number" && v == MAGIC_CONST_MOUSE_Y) { return 0; }
+            // if (typeof v == "number" && v == MAGIC_CONST_IF_AS_CC) { return 0; }
+            //there are more magics, but no obvious way to implement them here
+            return v;
+        }));
         this.interpreter.activecompid = compid;
         await this.interpreter.callscriptid(cbdata[0]);
         await this.interpreter.runToEnd();
@@ -152,12 +168,11 @@ export class UiRenderContext extends TypedEmitter<{ hover: RsInterfaceComponent 
 
 function rsInterfaceStyleSheet() {
     let css = "";
-    css += `html{color:white;font-size:12px;}\n`;
     css += ".rs-component{position:absolute;pointer-events:none;}\n";
     css += ".rs-component--highlight{outline:1px solid red;}\n";
     css += ".rs-image{width:100%;height:100%;}\n";
     css += ".rs-image--cover{background-size:100% 100%; background-repeat:no-repeat;}";
-    css += ".rs-interface-container{position:absolute;top:0px;left:0px;right:0px;bottom:0px;display:flex;align-items:center;justify-content:center;}";
+    css += ".rs-interface-container{position:absolute;top:0px;left:0px;right:0px;bottom:0px;display:flex;align-items:center;justify-content:center;color:white;font-size:12px;}";
     css += ".rs-interface-container-sub{position:relative;outline:1px solid green;}";
     css += ".rs-model{position:absolute;top:0px;left:0px;width:100%;height:100%;}";
     css += ".rs-componentmeta{}";
@@ -177,7 +192,7 @@ function embeddedjsmodule(comps: interfaces[]) {
 
 export async function loadRsInterfaceData(ctx: UiRenderContext, id: number) {
 
-    let arch = await ctx.source.getArchiveById(cacheMajors.interfaces, id);
+    let arch = await ctx.source.getArchiveById(cacheMajors.components, id);
 
     let comps = new Map<number, RsInterfaceComponent>();
 
@@ -185,7 +200,7 @@ export async function loadRsInterfaceData(ctx: UiRenderContext, id: number) {
         try {
             let compid = packComponent(id, sub.fileid);
             if (ctx.comps.has(compid)) { throw new Error("ui render context already had comp with same id"); }
-            let comp = new RsInterfaceComponent(ctx, parse.interfaces.read(sub.buffer, ctx.source), compid);
+            let comp = new RsInterfaceComponent(ctx, parse.components.read(sub.buffer, ctx.source), compid);
             comps.set(sub.fileid, comp);
             ctx.comps.set(compid, comp);
         } catch (e) {
@@ -265,12 +280,11 @@ export function renderRsInterfaceDOM(ctx: UiRenderContext, data: Awaited<ReturnT
     }
 
     let loadprom: Promise<void>
-    if (ctx.runOnloadScripts) {
+    if (ctx.scriptdeob) {
         loadprom = (async () => {
-            await clientScriptDeobPopup(ctx.source);
             for (let comp of data.comps.values()) {
                 if (comp.data.scripts.load.length != 0) {
-                    await ctx.runClientScriptCallback(comp.compid, comp.data.scripts.load).catch(e => console.warn("comp load err", e));
+                    await ctx.runClientScriptCallback(ctx.scriptdeob!, comp.compid, comp.data.scripts.load).catch(e => console.warn("comp load err", e));
                 }
             }
         })();
@@ -360,8 +374,9 @@ function uiModelRenderer(renderer: ThreeJsRenderer, sceneCache: ThreejsSceneCach
         roty: camdata.rotate_y,
         rotz: camdata.rotate_z,
         translatex: camdata.translate_x / 4,
-        translatey: camdata.translate_y / 4,
-        zoom: camdata.zoom * 8
+        translatey: 0,
+        translatez: camdata.translate_y / 4,
+        zoom: camdata.zoom
     };
     let canvas = document.createElement("canvas");
     canvas.classList.add("rs-model");
@@ -369,13 +384,14 @@ function uiModelRenderer(renderer: ThreeJsRenderer, sceneCache: ThreejsSceneCach
     let model: RSModel | null = null;
     let setmodel = (modelid: number) => {
         model = new RSModel(sceneCache, [{ modelid, mods: {} }], `model_${modelid}`);
-        modelrender.setmodel(model.getSceneElements(), 0);
+        modelrender.setmodel(model);
         model.model.then(render);
     }
     let render = () => {
         let width = canvas.clientWidth;
         let height = canvas.clientHeight;
         if (width == 0 || height == 0) { return; }
+        camconfig.zoom = camdata.zoom * height / 32;
         let img = modelrender.takePicture(width, height, camconfig);
         canvas.width = img.width;
         canvas.height = img.height;
@@ -490,7 +506,7 @@ export class RsInterfaceComponent {
             childhtml += rsmarkupToSafeHtml(this.data.textdata.text);
         }
         if (this.data.modeldata) {
-            let isplaceholder = this.data.modeldata.modelid == 0x7fff || this.data.modeldata.modelid == 0xffff;
+            let isplaceholder = this.data.modeldata.modelid == 0x7fff || this.data.modeldata.modelid == 0xffff || this.data.modeldata.modelid == -1;
             style += "background:rgba(0,255,0,0.5);outline:blue;";
             childhtml += (isplaceholder ? "placeholder" : this.data.modeldata.modelid);
         }
@@ -530,7 +546,7 @@ export class RsInterfaceComponent {
         if (!this.element) { throw new Error("element not set"); }
         let { style, title } = this.getStyle();
         if (this.data.modeldata) {
-            let isplaceholder = this.data.modeldata.modelid == 0x7fff || this.data.modeldata.modelid == 0xffff;
+            let isplaceholder = this.data.modeldata.modelid == 0x7fff || this.data.modeldata.modelid == 0xffff || this.data.modeldata.modelid == -1;
             if (!isplaceholder && this.ctx.renderer && this.ctx.sceneCache) {
                 this.modelrenderer ??= uiModelRenderer(this.ctx.renderer, this.ctx.sceneCache, this.data.modeldata.positiondata!);
                 this.modelrenderer.setmodel(this.data.modeldata.modelid);
@@ -579,7 +595,6 @@ export class RsInterfaceComponent {
 
     getStyle() {
         let style = "";
-        let childhtml = "";
         style += cssPosition(this.data);
         style += cssSize(this.data);
         let clickable = false;
@@ -609,7 +624,7 @@ export class RsInterfaceComponent {
             }
             clickable = true;
         } else if (this.data.containerdata) {
-            //nothing
+            style += "overflow:hidden;";
         } else if (this.data.spritedata) {
         } else if (this.data.modeldata) {
             clickable = true;
@@ -619,6 +634,9 @@ export class RsInterfaceComponent {
         }
         if (clickable) {
             style += "pointer-events:initial;";
+        }
+        if (this.data.hidden) {
+            style += "display:none;";
         }
         let title = this.data.rightclickopts.filter(q => q).join("\n");
 
@@ -680,6 +698,7 @@ export class CS2Api {
             rightclickcursors: [],
             rightclickopts: [],
             scripts: {} as any,
+            scriptdata: {} as any,
             unkdata: null,
             unk10data: null,
             unk11data: null,
@@ -801,23 +820,23 @@ export class CS2Api {
         this.changed();
     }
 
-    setHide(hide: number) { this.data && (this.data.hidden = hide); }
-    setWidth(w: number) { this.data && (this.data.basewidth = w); }
-    setHeight(h: number) { this.data && (this.data.basewidth = h); }
-    setX(x: number) { this.data && (this.data.baseposx = x); }
-    setY(y: number) { this.data && (this.data.baseposy = y); }
+    setHide(hide: number) { this.data && (this.data.hidden = hide); this.changed(); }
+    setWidth(w: number) { this.data && (this.data.basewidth = w); this.changed(); }
+    setHeight(h: number) { this.data && (this.data.baseheight = h); this.changed(); }
+    setX(x: number) { this.data && (this.data.baseposx = x); this.changed(); }
+    setY(y: number) { this.data && (this.data.baseposy = y); this.changed(); }
     getHide() { return this.data?.hidden ?? 0; }
     getWidth() { return this.data?.basewidth ?? 0; }
     getHeight() { return this.data?.baseheight ?? 0; }
     getX() { return this.data?.baseposx ?? 0; }
     getY() { return this.data?.baseposy ?? 0; }
-    setOp(index: number, text: string) { console.log(`setop ${this.comp?.compid ?? -1} ${index} ${text}`); }//TODO
+    setOp(index: number, text: string) { console.log(`setop ${this.comp?.compid ?? -1} ${index} ${text}`); this.changed(); }//TODO
     getOp(index: number) { return this.data?.rightclickopts[index] ?? ""; }
 
     //text
-    setText(text: string) { if (this.data?.textdata) { this.data.textdata.text = text; } }
+    setText(text: string) { if (this.data?.textdata) { this.data.textdata.text = text; } this.changed(); }
     getText() { return this.data?.textdata?.text ?? ""; }
-    setTextAlign(a: number, b: number, c: number) { this.data?.textdata && (this.data.textdata.alignhor = c, this.data.textdata.alignver = b, this.data.textdata.multiline = a | 0); }
+    setTextAlign(a: number, b: number, c: number) { this.data?.textdata && (this.data.textdata.alignhor = c, this.data.textdata.alignver = b, this.data.textdata.multiline = a | 0); this.changed(); }
     getTextAlign() { return [this.data?.textdata?.alignhor ?? 0, this.data?.textdata?.alignver ?? 0, this.data?.textdata?.multiline ?? 0]; }
 
     //sprite

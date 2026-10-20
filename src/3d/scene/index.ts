@@ -221,6 +221,21 @@ export async function materialToModel(sceneCache: ThreejsSceneCache, id: number)
 	});
 }
 
+export async function identityKitToModel(sceneCache: ThreejsSceneCache, id: number) {
+	let kit = await sceneCache.engine.getObject("identitykit", id);
+	return castModelInfo({
+		models: kit.models?.map(q => ({
+			modelid: q,
+			mods: { replaceColors: kit.recolor ?? [] }
+		})) ?? [],
+		anims: {},
+		info: { kit },
+		id: id,
+		assetName: "",
+		name: `identitykit:${id}`
+	});
+}
+
 export function serializeAnimset(group: animgroupconfigs) {
 	let anims: Record<string, number> = {};
 	let addanim = (name: string, id: number) => {
@@ -244,6 +259,7 @@ export function serializeAnimset(group: animgroupconfigs) {
 	}
 	//TODO yikes, this object is not a map
 	for (let [key, val] of Object.entries(group)) {
+		if (key.startsWith("$")) { continue; }
 		if (typeof val == "number") {
 			addanim(key, group[key]);
 		}

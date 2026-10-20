@@ -1,13 +1,10 @@
 export const cacheMajors = {
 	framemaps: 1,
 	config: 2,
-	interfaces: 3,
+	components: 3,
 	mapsquares: 5,
-
-	oldmodels: 7,
 	sprites: 8,
 	clientscript: 12,
-	fontmetricsOld: 13,
 	sounds: 14,
 	locs: 16,
 	enums: 17,
@@ -16,17 +13,32 @@ export const cacheMajors = {
 	sequences: 20,
 	spotanims: 21,
 	structs: 22,
+	worldmap: 23,
 	quickchat: 24,
 	materials: 26,
 	particles: 27,
-	worldmap: 23,
 	client_cutscenes: 35,
 	music: 40,
+	worldmaprender: 41,
 	maplabellocations: 42,
 	models: 47,
 	frames: 48,
+	texturesDds: 52,
+	texturesPng: 53,
+	texturesBmp: 54,
+	texturesKtx: 55,
+	skeletalAnims: 56,
+	achievements: 57,
+	fontmetrics: 58,
+	vectorfonts: 59,
+	stylesheets: 60,
+	cutscenes: 66,
+	filenames: 67,
 
+	// old stuff
+	oldmodels: 7,
 	texturesOldPng: 9,
+	fontmetricsOld: 13,
 	texturesOldCompoundPng: 37,
 
 	textures2015Png: 43,
@@ -36,22 +48,20 @@ export const cacheMajors = {
 	textures2015CompoundDds: 50,
 	textures2015PngMips: 51,
 
-	texturesDds: 52,
-	texturesPng: 53,
-	texturesBmp: 54,
-	texturesKtx: 55,
-
-	skeletalAnims: 56,
-
-	achievements: 57,
-	fontmetrics: 58,
-	vectorfonts: 59,
-	stylesheets: 60,
-	// 61 vfx
-	cutscenes: 66,
-	filenames: 67,
-
 	index: 255
+
+	// unknown stuff
+	// 10: one single file, seems to contain a 32x8 1bpp bitmap or lookup table
+	// 28: 11 fairly complex files
+	// 29: 269 configs of some kind
+	// 32: 11 large files with low entropy
+	// 33: 3 files, contains text "Preparing Your Greatest Adventure"
+	// 34: 11 files very similar to 32
+	// 41: 771 archieve, subfile 0 seems to contain compressed tile data
+	// 49: 252 files, seems to repeat a series of numbers 2 times
+	// 61: 1283 files, vfx
+	// 62: 7 files, contains text that seems to imply experimental bas with anim blending
+	// 65: 2 small files
 } as const;
 
 export const internalNameFiles = {
@@ -67,7 +77,7 @@ export const internalNameFiles = {
 	interface: 24,
 	inv: 25,
 	loc: 28,
-	maplabel: 29,
+	mapelement: 29,
 	material: 32,
 	model: 34,
 	npc: 35,
@@ -92,14 +102,14 @@ export const internalNameFiles = {
 	ui_anim_curve: 96,
 	ui_anim: 97,
 
-	// hardcoded, extract their value from packed_varp_and_varbit
+	// hardcoded, extracts its values from various var_x files, not a real file in the cache
 	varbit: 1001
-}
+} satisfies Partial<Record<JsonFieldTypes, number>>;
 
 //represents the largest build number that this application is aware off
 //is used as default value when a cache is considered "current"
 //only needs to be updated when backward incompatible code paths are added
-export const latestBuildNumber = 940;
+export const latestBuildNumber = 950;
 
 export const cacheMapFiles = {
 	locations: 0,
@@ -111,11 +121,15 @@ export const cacheMapFiles = {
 
 export const cacheConfigPages = {
 	mapunderlays: 1,
+	// 2: 742 empty files (just one 0x00)
 	identityKit: 3,
 	mapoverlays: 4,
 	inventories: 5,
+	// 7: 350 empty files
 	params: 11,
+	areas: 18,
 	skyboxes: 29,
+	// 31: 37 small files which seem to have color and some other data
 	animgroups: 32,
 	cursors: 33,
 	mapscenes: 34,
@@ -123,10 +137,10 @@ export const cacheConfigPages = {
 	maplabels: 36,
 	dbtables: 40,
 	dbrows: 41,
-	headbars: 72,
+	// 42: 1024 empty files
 	hitmarks: 46,
-
-	// 46 probly hitsplats
+	// 48: 19 empty files
+	// 49: 2 empty files
 	varplayer: 60,
 	varnpc: 61,
 	varclient: 62,
@@ -136,8 +150,14 @@ export const cacheConfigPages = {
 	varclan: 66,
 	varclansettings: 67,
 	varcampaign: 68,
-	varplayergroup: 75,
 	varbits: 69,
+	// 70: 365 empty files
+	headbars: 72,
+	// 73: 45 empty files
+	varplayergroup: 75,
+	// 76: 40 moderately complex files
+	// 80: 24 files only one having one value
+	// 83: 869 complex files, already decoded in config83.jsonc, meaning unclear
 
 	//used before 488 (feb 2008)
 	locs_old: 6,
@@ -232,8 +252,8 @@ export const vartypes = {
 	inputtype: 72,
 	struct: 73,
 	dbrow: 74,
-	type_75: 75,
-	type_76: 76,
+	type_75: 75,//CBTV2CA_COURSE_LABEL
+	type_76: 76,//STATSTORABLEPROC/BANK_STORABLEPROC_PREVENT/CHEEVO_PATH_STORABLEPROC
 	type_77: 77,
 	type_78: 78,
 	type_79: 79,
@@ -249,7 +269,7 @@ export const vartypes = {
 	type_90: 90,
 	type_91: 91,
 	type_92: 92,
-	type_93: 93,
+	headbar: 93,
 	bug_template: 94,
 	billing_auth_flag: 95,
 	account_feature_flag: 96,
@@ -261,7 +281,7 @@ export const vartypes = {
 	material: 102,
 	seqgroup: 103,
 	temp_hiscore: 104,
-	temp_hiscore_length_type: 105,
+	temp_hiscore_length_type: 105,//seems to be country id instead?
 	temp_hiscore_display_type: 106,
 	temp_hiscore_contribute_result: 107,
 	audiogroup: 108,
@@ -307,11 +327,16 @@ export const vartypes = {
 	unknown_int: 501,
 	unknown_long: 502,
 	unknown_string: 503,
-	scriptref: 504,
+	clientscript: 504,
 	scriptsubref: 505
 	//max 511 (9bit) or overflow elsewhere in code
 }
-export const vartypeReverseMap = new Map(Object.entries(vartypes).map(q => [q[1], q[0]]));
+export const vartypeReverseMap = new Map<number, keyof typeof vartypes>(Object.entries(vartypes).map(q => [q[1], q[0] as any]));
+
+type ExtraPropTypes =
+	"varbit" | "var_world" | "var_player_group" | "var_region" | "var_clansetting" | "var_campaign" | "var_clan" | "var_clan_setting" | "var_client" | "var_npc" | "var_object"
+	| "dbtable" | "mapsquare" | "mapelement" | "param" | "ui_anim_curve" | "ui_anim" | "ui_anim_curve" | "overlay" | "underlay" | "frame" | "framemap" | "skeletalanim";
+export type JsonFieldTypes = keyof typeof vartypes | ExtraPropTypes | "unknown" | "";
 
 export const lastLegacyBuildnr = 377;
 //unclear if there ended up being overlap with (public) rs2 since this was 12 years after rs2 release

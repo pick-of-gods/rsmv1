@@ -4,6 +4,7 @@ import { ClientScriptOp, StackDiff, StackList, SwitchJumpTable, branchInstructio
 import { rs3opnames } from "./callibration/opnames";
 import { CS2Api, MAGIC_CONST_CURRENTCOMP, UiRenderContext } from "../scripts/renderrsinterface";
 import { getEnumInt, getStructInt } from "./util";
+import { unpackDBTableField } from "../utils";
 
 
 type ScriptScope = {
@@ -56,7 +57,6 @@ export class ClientScriptInterpreter {
         return comp;
     }
     getComponent(compid: number) {
-        if ((compid | 0) == MAGIC_CONST_CURRENTCOMP) { compid = this.activecompid; }
         let comp = this.uictx?.comps.get(compid);
         if (!comp) { return new CS2Api(null); }
         return comp.api;
@@ -66,12 +66,15 @@ export class ClientScriptInterpreter {
         this.callscript(script, id);
     }
     async runToEnd() {
-        while (true) {
+        let budget = 1000e3;
+        while (this.scope) {
             let res = this.next();
             if (res instanceof Promise) {
                 res = await res;
             }
-            if (!res) { break; }
+            if (--budget <= 0) {
+                throw new Error(`max execution count reached in runToEnd\n${this.scopeStack.map(q => `at script${q.scriptid}:${q.index}`).join("\n")}`);
+            }
         }
     }
     callscript(script: clientscript, scriptid: number) {
@@ -92,7 +95,7 @@ export class ClientScriptInterpreter {
     }
 
     log(text: string) {
-        console.log(`CS2: ${"  ".repeat(this.scopeStack.length)} ${text}`);
+        // console.log(`CS2: ${"  ".repeat(this.scopeStack.length)} ${text}`);
     }
     pushStackdiff(diff: StackDiff) {
         if (diff.vararg != 0) { throw new Error("cannot push vararg"); }
@@ -169,17 +172,8 @@ export class ClientScriptInterpreter {
             throw new Error("jumped out of bounds");
         }
         let op = this.scope.ops[this.scope.index++];
-        let implemented = implementedops.get(op.opcode);
-        if (!implemented) {
-            //TODO create a proper way to deal with "not-quite-named" ops
-            //try find raw op name
-            for (let [id, name] of Object.entries(rs3opnames)) {
-                if (+id == op.opcode) {
-                    implemented = namedimplementations.get(name);
-                    break;
-                }
-            }
-        }
+        let implemented = implementedops.get(op.opcode) ?? getnamedimplementation(op.opcode);
+
         let res: Promise<void> | void = undefined;
         if (op.opcode == namedClientScriptOps.return) {
             this.scopeStack.pop();
@@ -190,7 +184,7 @@ export class ClientScriptInterpreter {
         } else {
             let opinfo = this.calli.ops.get(op.opcode);
             if (!opinfo) { throw new Error(`Uknown op with opcode ${op.opcode}`); }
-            if (!opinfo.stackinfo.initializedthrough) { throw new Error(`Unknown params/returns for op ${op.opcode}`); }
+            if (!opinfo.stackinfo.initializedthrough) { throw new Error(`Unknown params/returns for op ${op.opcode} (${op.opname ?? "no name"})`); }
             this.popStacklist(opinfo.stackinfo.in);
             this.pushStackdiff(opinfo.stackinfo.out.toStackDiff());
         }
@@ -320,9 +314,7 @@ implementedops.set(namedClientScriptOps.dbrow_getfield, inter => {
     let tablefield = inter.popint();
     let rowid = inter.popint();
 
-    let dbtable = (tablefield >> 12) & 0xffff;
-    let columnid = (tablefield >> 4) & 0xff;
-    let subfield = tablefield & 0xf;
+    let { dbtable, columnid, subfield } = unpackDBTableField(tablefield);
     let table = inter.calli.dbtables.get(dbtable);
     let column = table?.columndata?.find(q => q.id == columnid);
     if (!column) { throw new Error(`couldn't find dbtable ${dbtable}.${columnid}`); }
@@ -385,6 +377,9 @@ implementedops.set(namedClientScriptOps.poplocalstring, (inter, op) => {
     if (op.imm >= inter.scope.localstrings.length) { throw new Error("invalid poplocalstring"); }
     inter.scope.localstrings[op.imm] = inter.popstring();
 });
+implementedops.set(namedClientScriptOps.popdiscardint, inter => { inter.popint(); });
+implementedops.set(namedClientScriptOps.popdiscardlong, inter => { inter.poplong(); });
+implementedops.set(namedClientScriptOps.popdiscardstring, inter => { inter.popstring(); });
 implementedops.set(namedClientScriptOps.printmessage, inter => inter.log(`>> ${inter.popstring()}`));
 implementedops.set(namedClientScriptOps.inttostring, inter => inter.pushstring(inter.popdeep(1).toString(inter.popdeep(0))));
 implementedops.set(namedClientScriptOps.strcmp, inter => {
@@ -512,3 +507,19 @@ namedimplementations.set("CC_GETTILING", (inter, op) => inter.pushint(inter.getC
 // namedimplementations.set("xxxxx", inter => xxxx)
 // namedimplementations.set("xxxxx", inter => xxxx)
 // namedimplementations.set("xxxxx", inter => xxxx)
+
+
+let namedimplementationreverse: Map<number, OpImplementation> | null = null;
+function getnamedimplementation(id: number) {
+    if (!namedimplementationreverse) {
+        //non-negligible initialization of the reverse mapping, done lazily on first access
+        namedimplementationreverse = new Map<number, OpImplementation>();
+        for (let [id, name] of Object.entries(rs3opnames)) {
+            if (namedimplementations.has(name)) {
+                namedimplementationreverse.set(Number(id), namedimplementations.get(name)!);
+            }
+        }
+    }
+    return namedimplementationreverse.get(id) ?? null;
+}
+

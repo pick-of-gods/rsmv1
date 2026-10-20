@@ -47,11 +47,6 @@ export class ClientScriptDeobLoader {
     static forCache(source: CacheFileSource): ClientScriptDeobLoader {
         return source.decodeArgs.clientScriptDeob ??= new ClientScriptDeobLoader();
     }
-    static forCacheArgsOrThrow(args: Record<string, any>) {
-        let res = args.clientScriptDeob as ClientScriptDeobLoader | undefined;
-        if (!res || !res.loaded) { throw new Error("clientScriptDeob not set in args"); }
-        return res.loaded;
-    }
 
     getOrThrow() {
         if (!this.loaded) { throw new Error("clientscript deob not loaded yet"); }
@@ -73,8 +68,7 @@ export class ClientScriptDeobLoader {
     }
 
     async loadOrGenerate(source: CacheFileSource, makeScriptOutput?: () => Promise<ScriptOutput>) {
-        if (this.loadStoredPromise) { await this.loadStoredPromise; }
-        if (this.loaded) { return this.loaded; }
+        await this.tryLoadStored(source);
         this.generatePromise ??= (async () => {
             let deob = await ClientscriptObfuscation.create(source);
             let scriptctx = (makeScriptOutput ? await makeScriptOutput() : new CLIScriptOutput());

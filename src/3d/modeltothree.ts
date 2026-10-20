@@ -7,7 +7,7 @@ import { convertMaterial, defaultMaterial, materialCacheKey, MaterialData } from
 import * as THREE from "three";
 import { CacheFileSource, CacheIndex, mappedFileIds, oldConfigMaps, SubFile } from "../cache";
 import { CachedObject, CachingFileSource } from "../cache/memorycache";
-import { Bone, BufferAttribute, Mesh, Object3D, Skeleton, SkinnedMesh } from "three";
+import { Bone, Box3, BufferAttribute, Mesh, Object3D, Skeleton, SkinnedMesh } from "three";
 import { cacheFileJsonModes, iterateJsonFiles, parse } from "../parser/jsondecoders";
 import { mapsquare_underlays } from "../../generated/mapsquare_underlays";
 import { mapsquare_overlays } from "../../generated/mapsquare_overlays";
@@ -348,7 +348,7 @@ export class EngineCache extends CachingFileSource {
 	/**
 	 * very aggressive caching, do not use for objects which take a lot of memory
 	 */
-	getJsonSearchData(modename: keyof typeof cacheFileJsonModes) {
+	getJsonSearchData<T extends keyof typeof cacheFileJsonModes>(modename: T) {
 		let cached = this.jsonSearchCache.get(modename);
 		if (!cached) {
 			let mode = cacheFileJsonModes[modename];
@@ -358,6 +358,8 @@ export class EngineCache extends CachingFileSource {
 				let files: any[] = [];
 				await iterateJsonFiles(this, mode, allfiles, obj => {
 					files.push(obj);
+				}, (err, id, logical) => {
+					console.warn(`error parsing ${modename} file ${id} logical ${logical}: ${err}`);
 				});
 				return files;
 			})();
@@ -831,6 +833,20 @@ export async function ob3ModelToThree(scene: ThreejsSceneCache, model: ModelData
 		rootnode.add(...model.debugmeshes);
 	}
 	return rootnode;
+}
+
+export function getModelBoundingBox(modeldata: ModelData | null | undefined) {
+	// i'm still missing something either here or in item camera code, seems to be legacy gower code so could be anything
+	let boundingbox = new Box3();
+	// model origin is implied in rs
+	boundingbox.min.y = 0;
+	boundingbox.max.y = 0;
+	let temp = new Box3();
+	for (let mesh of modeldata?.meshes ?? []) {
+		temp.setFromBufferAttribute(mesh.attributes.pos);
+		boundingbox.union(temp);
+	}
+	return boundingbox;
 }
 
 export function getModelHashes(model: models, id: number) {

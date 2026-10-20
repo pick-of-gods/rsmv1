@@ -210,7 +210,7 @@ const locationDeps: DepCollector = async (cache, addDep, addHash) => {
 					}
 				}
 			}
-			if (loc.morphs_1 || loc.morphs_2) {
+			if (loc.morphs_1 || loc.morphs_2 || loc.morphs_1_v2 || loc.morphs_2_v2) {
 				let morphid = defaultMorphId(loc);
 				if (morphid != -1) {
 					addDep("loc", morphid, "loc", id);
@@ -339,7 +339,7 @@ const skeletonDeps: DepCollector = async (cache, addDep, addHash) => {
 	for (let skelindex of skelindices) {
 		if (!skelindex) { continue; }
 		addHash("skeleton", skelindex.minor, skelindex.crc, skelindex.version);
-		let skel = await cache.getObject("skeletons", skelindex.minor);
+		let skel = await cache.getObject("skeletalanims", skelindex.minor);
 		addDep("framebase", skel.framebase, "skeleton", skelindex.minor);
 	}
 }

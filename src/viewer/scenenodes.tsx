@@ -1,10 +1,10 @@
 import * as React from "react";
 import classNames from "classnames";
 import { ThreeJsSceneElement, ThreeJsSceneElementSource, exportThreeJsGltf, exportThreeJsStl, RenderCameraMode } from "./threejsrender";
-import { downloadBlob, UIEngineContext } from "./maincomponents";
+import { downloadBlob, UIContext, UIEngineContext, UIRootContext } from "./maincomponents";
 import { showModal } from "./jsonsearch";
 import { findImageBounds, makeImageData } from "../imgutils";
-import { TabStrip, CanvasView, useAwaited } from "./commoncontrols";
+import { TabStrip, CanvasView, useAwaited, useEmitterProperty } from "./commoncontrols";
 import { ScriptsUI } from './tabs/scripts';
 import { SceneItem, SceneLocation, SceneMaterialIsh, SceneNpc, SceneRawModel, SceneSpotAnim } from './tabs/simplemodes';
 import { ScenePlayer } from './tabs/avatar';
@@ -13,13 +13,15 @@ import { SceneScenario } from './tabs/scenario';
 import VR360Viewer from "../libs/vr360viewer";
 import { BrowseUI } from "./tabs/browse";
 import { BlobTS, prettyFileSize } from "../utils";
+import { GraphSearchView } from "./tabs/search";
 
 
-export type LookupMode = "model" | "item" | "npc" | "object" | "material" | "map" | "avatar" | "spotanim" | "scenario" | "browse" | "scripts";
+export type LookupMode = "model" | "item" | "npc" | "object" | "material" | "map" | "avatar" | "spotanim" | "scenario" | "browse" | "scripts" | "search";
 
 type ModelBrowserState = { search: unknown, mode: LookupMode }
 
 export function ModelBrowser(p: {}) {
+	let ctx = React.useContext(UIRootContext);
 	let [state, setMode] = React.useReducer((prev: any, v: LookupMode) => {
 		localStorage.rsmv_lastmode = v;
 		return { search: null, mode: v } as ModelBrowserState;
@@ -29,6 +31,8 @@ export function ModelBrowser(p: {}) {
 		catch (e) { }
 		return { search, mode: localStorage.rsmv_lastmode } as ModelBrowserState;
 	});
+
+	let tabvisible = useEmitterProperty(ctx, "showTab", v => v.visibleTab != null);
 
 	const tabs: Record<LookupMode, string> = {
 		item: "Item",
@@ -41,6 +45,7 @@ export function ModelBrowser(p: {}) {
 		spotanim: "Spotanim",
 		scenario: "Scenario",
 		browse: "Browse",
+		search: "Search",
 		scripts: "Scripts"
 	}
 
@@ -48,7 +53,7 @@ export function ModelBrowser(p: {}) {
 	return (
 		<React.Fragment>
 			<TabStrip value={state.mode} tabs={tabs} onChange={setMode} />
-			{ModeComp && <ModeComp initialId={state.search} />}
+			{ModeComp && <ModeComp initialId={state.search} canrender={!tabvisible} />}
 		</React.Fragment>
 	);
 }
@@ -285,11 +290,13 @@ export function RendererControls(p: {}) {
 }
 
 export type LookupModeProps = {
-	initialId: unknown
+	initialId: unknown,
+	canrender: boolean,
 }
 
 const LookupModeComponentMap: Record<LookupMode, React.ComponentType<LookupModeProps>> = {
 	browse: BrowseUI,
+	search: GraphSearchView,
 	model: SceneRawModel,
 	item: SceneItem,
 	avatar: ScenePlayer,

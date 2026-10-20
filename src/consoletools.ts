@@ -1,5 +1,5 @@
 import { CacheFileSource } from "./cache";
-import { unpackCoordgrid } from "./utils";
+import { unpackCoordgrid, unpackDBTableField } from "./utils";
 import { cliApi, CliApiContext } from "./clicommands";
 import * as cmdts from "cmd-ts";
 import { cacheConfigPages, internalNameFiles, cacheMajors, vartypes } from "./constants";
@@ -37,6 +37,7 @@ export function exposeDebugToolsInGlobal() {
     globalThis.getConfigCounts = getConfigCounts;
     globalThis.getlasttimestamp = getlasttimestamp;
     globalThis.browse = browse;
+    globalThis.dbfield = unpackDBTableField;
 }
 
 function coordgrid(coord: number) {
@@ -80,7 +81,7 @@ async function getKnownCounts() {
 
             let lastfile = fileids.at(-1);
             if (lastfile) {
-                let lastindex = mode.fileToLogical(source, lastfile.index.major, lastfile.index.minor, lastfile.subindex);
+                let lastindex = mode.fileToLogical(source, lastfile.index.major, lastfile.index.minor, lastfile.subid);
                 res[modename] = (Array.isArray(lastindex) && lastindex.length == 1 ? lastindex[0] : lastindex);
             }
         } catch (e) {
@@ -145,30 +146,31 @@ async function dumpjson(mode: string) {
     let res = await engine.getJsonSearchData(mode as any).files;
     let remapped: any[] = [];
     for (let f of res) {
-        remapped[f.$fileid] = f;
+        let id = Array.isArray(f.$fileid) ? ((f.$fileid[0] << 16) | f.$fileid[1]) : f.$fileid;
+        remapped[id] = f;
     }
     return remapped;
 }
 
 function bin(arr: any[]) {
     let bins = {};
-    for (let i = 0; i < arr.length; i++) {
+    for (let i in arr) {
         let key = arr[i];
         if (!bins[key]) { bins[key] = []; }
-        bins[key].push(i);
+        bins[key].push(+i);
     }
     return bins;
 }
 
 function binarr(arr: any[][]) {
     let bins = {};
-    for (let i = 0; i < arr.length; i++) {
+    for (let i in arr) {
         let sub = arr[i];
         if (sub) {
             for (let j = 0; j < sub.length; j++) {
                 let key = sub[j];
                 if (!bins[key]) { bins[key] = []; }
-                bins[key].push(i);
+                bins[key].push(+i);
             }
         }
     }

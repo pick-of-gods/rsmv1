@@ -7,8 +7,10 @@ import { boundMethod } from 'autobind-decorator';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
 import { STLExporter } from 'three/examples/jsm/exporters/STLExporter.js';
 import { ModelExtras, ClickableMesh } from '../3d/mapsquare';
-import { CubeCamera, AnimationClip, BufferGeometry, Camera, Clock, DoubleSide, Group, LinearFilter, Material, Matrix4, Mesh, Object3D, OrthographicCamera, PerspectiveCamera, RawShaderMaterial, RGBAFormat, Texture, Vector3, WebGLCubeRenderTarget, WebGLRenderer, PlaneGeometry } from "three";
+import { CubeCamera, AnimationClip, BufferGeometry, Camera, DoubleSide, Group, LinearFilter, Material, Matrix4, Mesh, Object3D, OrthographicCamera, PerspectiveCamera, RawShaderMaterial, RGBAFormat, Texture, Vector3, WebGLCubeRenderTarget, WebGLRenderer, PlaneGeometry, Timer, Box3 } from "three";
 import { UiCameraParams, updateItemCamera } from "./tabs/simplemodes";
+import { RSModel } from "../3d/scene/model";
+import { getModelBoundingBox } from "../3d/modeltothree";
 
 //TODO remove
 globalThis.THREE = THREE;
@@ -55,8 +57,8 @@ type AutoFrameMode = "forced" | "continuous" | "never";
 export type RenderCameraMode = "standard" | "vr360" | "item" | "topdown";
 
 export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
+	canvas: HTMLCanvasElement;
 	private renderer: THREE.WebGLRenderer;
-	private canvas: HTMLCanvasElement;
 	private skybox: { scene: THREE.Scene, camera: THREE.Camera } | null = null;
 	private scene: THREE.Scene;
 	private modelnode: THREE.Group;
@@ -65,7 +67,7 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 	private autoFrameMode: AutoFrameMode = "forced";
 	private contextLossCount = 0;
 	private contextLossCountLastRender = 0;
-	private clock = new Clock(true);
+	private clock = new Timer();
 
 	private sceneElements = new Set<ThreeJsSceneElementSource>();
 	private animationCallbacks = new Set<NonNullable<ThreeJsSceneElement["updateAnimation"]>>();
@@ -305,8 +307,8 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 	resizeRendererToDisplaySize() {
 		const canvas = this.renderer.domElement;
 		if (!canvas.isConnected) { return; }
-		let width = canvas.clientWidth;
-		let height = canvas.clientHeight;
+		let width = canvas.parentElement!.clientWidth;
+		let height = canvas.parentElement!.clientHeight;
 		if (this.forceAspectRatio) {
 			height = Math.min(height, Math.floor(width / this.forceAspectRatio));
 			width = Math.min(width, Math.floor(height * this.forceAspectRatio));
@@ -371,9 +373,10 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 		this.queuedFrameId = 0;
 
 		// update animations
+		this.clock.update();
 		let delta = this.clock.getDelta();
 		delta *= (globalThis.speed ?? 100) / 100;//TODO remove
-		this.animationCallbacks.forEach(q => q(delta, this.clock.elapsedTime));
+		this.animationCallbacks.forEach(q => q(delta, this.clock.getElapsed()));
 
 		this.resizeRendererToDisplaySize();
 		let cam2d = (cam ?? this.getCurrent2dCamera());
@@ -456,7 +459,7 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 				minFilter: THREE.LinearFilter,
 				magFilter: THREE.LinearFilter,
 				format: THREE.RGBAFormat,
-				colorSpace: (this.camMode != "vr360" ? this.renderer.outputColorSpace : THREE.LinearSRGBColorSpace),
+				colorSpace: (this.camMode != "vr360" ? this.renderer.outputColorSpace as THREE.ColorSpace : THREE.LinearSRGBColorSpace),
 				samples: gl.getParameter(gl.SAMPLES)
 			});
 			// (rendertarget as any).isXRRenderTarget = true;
@@ -489,7 +492,7 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 		let height = rendertarget?.height ?? this.canvas.height;
 		let buf = new Uint8Array(width * height * 4);//node-gl doesn't accept clamped
 		if (rendertarget) {
-			this.renderer.readRenderTargetPixels(rendertarget as any, 0, 0, width, height, buf);
+			this.renderer.readRenderTargetPixels(rendertarget, 0, 0, width, height, buf);
 			rendertarget.dispose();
 		} else {
 			let gl = this.renderer.getContext()
@@ -539,11 +542,8 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 	}
 
 	setCameraLimits(target?: Vector3) {
-		// compute the box that contains all the stuff
-		// from root and below
 		if (!target) {
-			const box = new THREE.Box3().setFromObject(this.modelnode);
-			const boxSize = box.getSize(new THREE.Vector3()).length();
+			const box = new THREE.Box3().setFromObject(this.modelnode, true);
 			target = box.getCenter(new THREE.Vector3());
 		}
 
@@ -622,7 +622,7 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 			let endindex: number = obj.geometry.index?.count ?? obj.geometry.attributes.position.count;
 			let startindex = 0;
 			let clickindex = isct.faceIndex;
-			if (typeof clickindex == "undefined") { throw new Error("???") }
+			if (clickindex == null) { throw new Error("???") }
 			for (let i = 0; i < meshdata.subranges.length; i++) {
 				if (clickindex * 3 < meshdata.subranges[i]) {
 					endindex = meshdata.subranges[i];
@@ -675,21 +675,22 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 		scene.add(dirLight);
 		scene.add(hemilight);
 		scene.add(modelnode);
-		let clock = new THREE.Clock();
+		let clock = new THREE.Timer();
 		let rendertarget: THREE.WebGLRenderTarget | null = null;
 
-		let currentnode: ThreeJsSceneElement | null = null;
-		let currentcentery = 0;
-		let setmodel = (model: ThreeJsSceneElement | null, centery: number) => {
-			if (currentnode?.modelnode) {
-				modelnode.remove(currentnode.modelnode);
+		let currentnode: RSModel | null = null;
+		let currentbox: Box3 | null = null;
+		let setmodel = (model: RSModel | null) => {
+			if (currentnode) {
+				modelnode.remove(currentnode.rootnode);
 				currentnode = null;
 			}
-			if (model?.modelnode) {
-				modelnode.add(model.modelnode);
+			if (model) {
+				modelnode.add(model.rootnode);
 				currentnode = model;
+				currentbox = getModelBoundingBox(model.loaded?.modeldata);
+				model.model.then(loaded => { if (currentnode == model) { currentbox = getModelBoundingBox(loaded.modeldata) } })
 			}
-			currentcentery = centery
 		}
 
 		let takePicture = (width: number, height: number, params: UiCameraParams) => {
@@ -700,17 +701,18 @@ export class ThreeJsRenderer extends TypedEmitter<ThreeJsRendererEvents> {
 					minFilter: THREE.LinearFilter,
 					magFilter: THREE.LinearFilter,
 					format: THREE.RGBAFormat,
-					colorSpace: this.renderer.outputColorSpace,
+					colorSpace: this.renderer.outputColorSpace as THREE.ColorSpace,
 					samples: gl.getParameter(gl.SAMPLES)
 				});
 			}
+			clock.update();
 			let delta = clock.getDelta();
-			currentnode?.updateAnimation?.(delta, clock.elapsedTime);
+			currentnode?.updateAnimation?.(delta, clock.getElapsed());
 
 			let oldtarget = this.renderer.getRenderTarget();
 			this.renderer.setRenderTarget(rendertarget);
 			let itemcam = new THREE.PerspectiveCamera();
-			updateItemCamera(itemcam, width, height, currentcentery, params);
+			updateItemCamera(itemcam, width, height, currentbox, params);
 
 			this.renderer.clearColor();
 			this.renderer.clearDepth();
@@ -749,7 +751,7 @@ export function disposeThreeTree(node: THREE.Object3D | null) {
 	}
 
 	let count = 0;
-	(node as any).traverse((object: any) => {
+	node.traverse((object: any) => {
 		if (!object.isMesh) return
 
 		count++;
@@ -779,6 +781,7 @@ export async function exportThreeJsGltf(node: THREE.Object3D) {
 		"RA_skinWeight_skin"
 	];
 	//there doesn't seem to be any good way to hook the exporter, so just temporarily edit the scene
+	let proms: Promise<void>[] = [];
 	node.traverseVisible(node => {
 		if (node.animations) {
 			anims.push(...node.animations.filter(q => q.duration != 0));
@@ -801,6 +804,22 @@ export async function exportThreeJsGltf(node: THREE.Object3D) {
 				undolist.push(() => attributes.normal = oldnormal);
 				node.geometry.attributes.normal = cloned;
 			}
+			let mat = node.material as THREE.MeshStandardMaterial;
+			if (mat.normalMap instanceof THREE.DataTexture) {
+				// threejs gltf converter doesn't know about data textures
+				// it tries to repack the normals, so we need to give it a gpu texture
+				let oldmap = mat.normalMap;
+				undolist.push(() => mat.normalMap = oldmap);
+				let threedata = mat.normalMap.image!;
+				let imgdata = makeImageData(new Uint8ClampedArray(threedata.data!.buffer, threedata.data!.byteOffset, threedata.data!.byteLength), threedata.width, threedata.height);
+				proms.push(createImageBitmap(imgdata, { imageOrientation: "flipY" }).then(bitmap => {
+					mat.normalMap = new THREE.Texture(bitmap);
+					mat.normalMap.needsUpdate = true;
+					mat.normalMap.wrapS = oldmap.wrapS;
+					mat.normalMap.wrapT = oldmap.wrapT;
+					mat.normalMap.magFilter = THREE.LinearFilter;
+				}));
+			}
 			//for some reason blender chokes on these
 			for (let attr of hiddenattributes) {
 				if (attributes[attr]) {
@@ -812,6 +831,7 @@ export async function exportThreeJsGltf(node: THREE.Object3D) {
 			}
 		}
 	});
+	await Promise.all(proms);
 	let res = await new Promise<Buffer>((resolve, reject) => {
 		exporter.parse(node, gltf => resolve(gltf as any), reject, {
 			binary: true,
@@ -824,7 +844,7 @@ export async function exportThreeJsGltf(node: THREE.Object3D) {
 
 export function exportThreeJsStl(node: THREE.Object3D) {
 	let exporter = new STLExporter();
-	let res = exporter.parse(node, { binary: true }) as any as DataView;
+	let res = exporter.parse(node, { binary: true });
 	return Promise.resolve(new Uint8Array(res.buffer, res.byteOffset, res.byteLength));
 }
 
@@ -952,7 +972,7 @@ export class VR360Render {
 			minFilter: LinearFilter,
 			magFilter: LinearFilter,
 			format: RGBAFormat,
-			colorSpace: parent.outputColorSpace,
+			colorSpace: parent.outputColorSpace as THREE.ColorSpace,
 			samples: 0//gl.getParameter(gl.SAMPLES)//three.js crashes if using multisampled here
 		});
 		//threejs always renders non-default render targets in linear, however they programmed in a 
